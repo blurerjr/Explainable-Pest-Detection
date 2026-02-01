@@ -3,229 +3,141 @@ import tensorflow as tf
 import numpy as np
 from PIL import Image
 import requests
-from io import BytesIO
 import os
+import cv2
+import matplotlib.pyplot as plt
 
-# Page configuration
-st.set_page_config(
-    page_title="Pest Detection System",
-    page_icon="🐛",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Model URL and local path
+model_url = "https://github.com/blurerjr/Explainable-Pest-Detection/releases/download/model/best_pest_model.keras"
+model_path = "best_pest_model.keras"
 
-# Custom styling
-st.markdown("""
-    <style>
-    .main {
-        padding: 2rem;
-    }
-    .pest-card {
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        background-color: #f0f2f6;
-        margin: 1rem 0;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-# Define pest classes
-PEST_CLASSES = ['aphids', 'armyworm', 'beetle', 'bollworm', 'catterpillar', 
-                'earthworms', 'grasshopper', 'mites', 'moth', 'sawfly', 
-                'stem_borer', 'wasp', 'weevil']
-
-IMAGE_SIZE = (224, 224)
-MODEL_URL = "https://github.com/blurerjr/Explainable-Pest-Detection/releases/download/model/best_pest_model.keras"
-
-@st.cache_resource
-def load_model(model_url):
-    """Load the pre-trained model"""
-    try:
-        # Download model from URL
-        response = requests.get(model_url, timeout=30)
-        response.raise_for_status()
-        
-        # Save temporarily
-        temp_model_path = "temp_model.keras"
-        with open(temp_model_path, 'wb') as f:
+# Download the model if it doesn't exist locally
+if not os.path.exists(model_path):
+    st.info("Downloading the model weights...")
+    response = requests.get(model_url)
+    if response.status_code == 200:
+        with open(model_path, 'wb') as f:
             f.write(response.content)
-        
-        # Load model
-        model = tf.keras.models.load_model(temp_model_path)
-        
-        # Clean up temp file
-        if os.path.exists(temp_model_path):
-            os.remove(temp_model_path)
-        
-        return model
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        return None
+        st.success("Model downloaded successfully!")
+    else:
+        st.error(f"Failed to download model. Status code: {response.status_code}")
+        st.stop()  # Stop execution if download fails
 
-def preprocess_image(image):
-    """Preprocess image for model prediction"""
-    # Resize image
-    image = image.resize(IMAGE_SIZE)
-    
-    # Convert to array and normalize
-    image_array = np.array(image) / 255.0
-    
-    # Add batch dimension
-    image_array = np.expand_dims(image_array, axis=0)
-    
-    return image_array
+# Load the model
+try:
+    model = tf.keras.models.load_model(model_path)
+except Exception as e:
+    st.error(f"Error loading model: {e}")
+    st.stop()
 
-def predict_pest(model, image):
-    """Make prediction on the image"""
-    if model is None:
-        return None, None
+# Pest classes
+class_names = ['aphids', 'armyworm', 'beetle', 'bollworm', 'catterpillar', 'earthworms', 'grasshopper', 'mites', 'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil']
+
+# Function to find the last convolutional layer
+def find_last_conv_layer(model):
+    for layer in reversed(model.layers):
+        if isinstance(layer, tf.keras.layers.Conv2D):
+            return layer.name
+    raise ValueError("No convolutional layer found in the model.")
+
+# Grad-CAM function
+def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None):
+    # Create a model that maps the input image to the activations of the last conv layer and the output predictions
+    grad_model = tf.keras.models.Model(
+        [model.inputs], [model.get_layer(last_conv_layer_name).output, model.output]
+    )
+
+    # Compute the gradient of the top predicted class for our input image
+    with tf.GradientTape() as tape:
+        last_conv_layer_output, preds = grad_model(img_array)
+        if pred_index is None:
+            pred_index = tf.argmax(preds[0])
+        class_channel = preds[:, pred_index]
+
+    # Gradient of the output neuron with regard to the output feature map of the last conv layer
+    grads = tape.gradient(class_channel, last_conv_layer_output)
+
+    # Vector of mean intensity over the channel axis
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+
+    # Multiply each channel in the feature map array by its importance
+    last_conv_layer_output = last_conv_layer_output[0]
+    heatmap = last_conv_layer_output @ pooled_grads[..., tf.newaxis]
+    heatmap = tf.squeeze(heatmap)
+
+    # Normalize the heatmap
+    heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
+    return heatmap.numpy()
+
+# Function to superimpose heatmap on image
+def superimpose_heatmap(img, heatmap, alpha=0.4):
+    # Resize the heatmap to match the image size
+    heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+    heatmap = np.uint8(255 * heatmap)
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+
+    # Superimpose
+    superimposed_img = cv2.addWeighted(img, 1 - alpha, heatmap, alpha, 0)
+    return superimposed_img
+
+# App title
+st.title("Explainable Pest Detection and Classification App")
+
+# Image upload
+uploaded_file = st.file_uploader("Upload an image of a pest or affected crop", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    # Display uploaded image
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Uploaded Image", use_column_width=True)
     
-    # Preprocess image
-    processed_image = preprocess_image(image)
+    # Preprocess the image for prediction
+    st.info("Processing the image...")
+    img_resized = image.resize((224, 224))
+    img_array = np.array(img_resized) / 255.0  # Normalize to [0, 1]
+    img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
     
     # Make prediction
-    predictions = model.predict(processed_image, verbose=0)
+    predictions = model.predict(img_array)
+    predicted_index = np.argmax(predictions, axis=1)[0]
+    predicted_class = class_names[predicted_index]
+    confidence = np.max(predictions) * 100
     
-    # Get class and confidence
-    predicted_class_idx = np.argmax(predictions[0])
-    confidence = float(predictions[0][predicted_class_idx])
-    predicted_class = PEST_CLASSES[predicted_class_idx]
+    # Display result
+    st.subheader("Prediction Result")
+    st.write(f"**Predicted Pest:** {predicted_class}")
+    st.write(f"**Confidence:** {confidence:.2f}%")
     
-    return predicted_class, confidence, predictions[0]
-
-def display_results(predicted_class, confidence, all_predictions):
-    """Display prediction results"""
-    col1, col2 = st.columns(2)
+    # Optional: Display all probabilities
+    if st.checkbox("Show detailed probabilities"):
+        probs = predictions[0]
+        for i, prob in enumerate(probs):
+            st.write(f"{class_names[i]}: {prob * 100:.2f}%")
     
-    with col1:
-        st.metric("Detected Pest", predicted_class.upper(), 
-                 delta=f"{confidence*100:.2f}% confidence")
-    
-    with col2:
-        st.metric("Confidence Score", f"{confidence*100:.2f}%")
-    
-    # Display all predictions as a bar chart
-    st.subheader("All Class Probabilities")
-    
-    # Create dataframe for visualization
-    predictions_df = {
-        'Pest Class': PEST_CLASSES,
-        'Probability': all_predictions
-    }
-    
-    st.bar_chart(
-        data={
-            'Pest Class': PEST_CLASSES,
-            'Probability': all_predictions
-        }
-    )
-    
-    # Show top 5 predictions
-    st.subheader("Top 5 Predictions")
-    top_5_idx = np.argsort(all_predictions)[-5:][::-1]
-    
-    for rank, idx in enumerate(top_5_idx, 1):
-        prob = all_predictions[idx]
-        st.write(f"{rank}. **{PEST_CLASSES[idx].replace('_', ' ').title()}**: {prob*100:.2f}%")
-
-# Main app
-def main():
-    st.title("🐛 Pest Detection and Classification System")
-    st.markdown("---")
-    
-    st.write("""
-    This application uses a deep learning model to detect and classify agricultural pests 
-    from images. Simply upload an image or take a photo of a pest, and the system will 
-    identify what type of pest it is.
-    """)
-    
-    # Load model
-    with st.spinner("Loading model..."):
-        model = load_model(MODEL_URL)
-    
-    if model is None:
-        st.error("Failed to load the model. Please check your internet connection and try again.")
-        return
-    
-    st.success("✅ Model loaded successfully!")
-    st.markdown("---")
-    
-    # Input method selection
-    input_method = st.radio("Choose input method:", 
-                           ["📤 Upload Image", "📷 Capture from Camera"],
-                           horizontal=True)
-    
-    image = None
-    
-    if input_method == "📤 Upload Image":
-        uploaded_file = st.file_uploader(
-            "Upload an image of a pest",
-            type=["jpg", "jpeg", "png", "bmp"],
-            help="Supported formats: JPG, JPEG, PNG, BMP"
-        )
-        if uploaded_file is not None:
-            image = Image.open(uploaded_file).convert('RGB')
-    
-    else:  # Camera input
-        camera_image = st.camera_input("Take a photo of the pest")
-        if camera_image is not None:
-            image = Image.open(camera_image).convert('RGB')
-    
-    # Process image
-    if image is not None:
-        col1, col2 = st.columns(2)
+    # Explainability with Grad-CAM
+    st.subheader("Model Explanation (Grad-CAM Heatmap)")
+    try:
+        last_conv_layer_name = find_last_conv_layer(model)
+        heatmap = make_gradcam_heatmap(img_array, model, last_conv_layer_name, predicted_index)
         
-        with col1:
-            st.subheader("Input Image")
-            st.image(image, use_column_width=True)
+        # Prepare original image for OpenCV (uint8, BGR)
+        img_cv = np.array(img_resized)
+        img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
         
-        with col2:
-            st.subheader("Analysis Results")
-            
-            # Make prediction
-            with st.spinner("Analyzing image..."):
-                predicted_class, confidence, all_predictions = predict_pest(model, image)
-            
-            if predicted_class is not None:
-                # Display results
-                st.success("Analysis complete!")
-                st.markdown("---")
-                display_results(predicted_class, confidence, all_predictions)
-                
-                # Additional information
-                st.markdown("---")
-                st.info(f"""
-                **Detected Pest:** {predicted_class.replace('_', ' ').title()}
-                
-                **Confidence:** {confidence*100:.2f}%
-                
-                Consider consulting with an agricultural expert for treatment recommendations.
-                """)
-            else:
-                st.error("Failed to make prediction. Please try again.")
-    
-    # Sidebar information
-    with st.sidebar:
-        st.header("ℹ️ About This App")
-        st.markdown("""
-        ### Supported Pest Classes
-        """)
+        # Superimpose
+        superimposed_img = superimpose_heatmap(img_cv, heatmap)
         
-        # Display pest classes in columns
-        cols = st.columns(2)
-        for idx, pest in enumerate(PEST_CLASSES):
-            with cols[idx % 2]:
-                st.write(f"• {pest.replace('_', ' ').title()}")
+        # Convert back to RGB for display
+        superimposed_img = cv2.cvtColor(superimposed_img, cv2.COLOR_BGR2RGB)
         
-        st.markdown("---")
-        st.markdown("""
-        ### How to Use
-        1. Choose to upload an image or take a photo
-        2. Select a clear image of the pest
-        3. Wait for the model to analyze
-        4. View the results and confidence score
+        # Display the heatmap overlaid image
+        st.image(superimposed_img, caption="Grad-CAM Heatmap (Red areas indicate regions of interest for the prediction)", use_column_width=True)
         
-        ### Tips for Best Results
-        - Use clear, well-lit images
-        - Ensure the pest is the main focus
-        
+        # Optional: Save and download
+        if st.button("Download Heatmap Image"):
+            pil_img = Image.fromarray(superimposed_img)
+            pil_img.save("heatmap.jpg")
+            with open("heatmap.jpg", "rb") as f:
+                st.download_button("Download", f.read(), file_name="pest_heatmap.jpg")
+    except Exception as e:
+        st.warning(f"Could not generate Grad-CAM: {e}. The model may not have compatible convolutional layers.")
