@@ -66,14 +66,6 @@ def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None
     heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
     return heatmap.numpy()
 
-# Function to superimpose heatmap on image
-def superimpose_heatmap(img, heatmap, alpha=0.4):
-    heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
-    heatmap = np.uint8(255 * heatmap)
-    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-    superimposed_img = cv2.addWeighted(img, 1 - alpha, heatmap, alpha, 0)
-    return superimposed_img
-
 # Function to localize pest (find bounding box from heatmap)
 def localize_pest(img_cv, heatmap, threshold=0.6):
     # Threshold the heatmap
@@ -102,11 +94,9 @@ st.title("🦟 Interactive Pest Detection & Classification")
 # Sidebar for settings
 with st.sidebar:
     st.header("Settings")
-    show_heatmap = st.checkbox("Show Grad-CAM Heatmap", value=True)
     show_localization = st.checkbox("Show Localized Pest", value=True)
     show_probs = st.checkbox("Show Detailed Probabilities", value=False)
-    heatmap_alpha = st.slider("Heatmap Opacity", 0.1, 0.8, 0.4)
-    localization_threshold = st.slider("Localization Threshold", 0.1, 0.9, 0.6)
+    localization_threshold = st.slider("Box Threshold", 0.1, 0.9, 0.6)
 
 # Main layout with two columns: Left for images, Right for results
 col1, col2 = st.columns(2)
@@ -132,7 +122,7 @@ with col1:
             predicted_class = class_names[predicted_index]
             confidence = np.max(predictions) * 100
             
-            # Grad-CAM
+            # Grad-CAM for localization (no heatmap display)
             try:
                 last_conv_layer_name = find_last_conv_layer(model)
                 heatmap = make_gradcam_heatmap(img_array, model, last_conv_layer_name, predicted_index)
@@ -141,11 +131,6 @@ with col1:
                 img_cv = np.array(img_resized)
                 img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
                 
-                if show_heatmap:
-                    superimposed_img = superimpose_heatmap(img_cv, heatmap, alpha=heatmap_alpha)
-                    superimposed_img_rgb = cv2.cvtColor(superimposed_img, cv2.COLOR_BGR2RGB)
-                    st.image(superimposed_img_rgb, caption="Grad-CAM Heatmap (Red areas: High attention)", use_column_width=True)
-                
                 if show_localization:
                     localized_img, boxed_img = localize_pest(img_cv, heatmap, threshold=localization_threshold)
                     if localized_img is not None:
@@ -153,11 +138,11 @@ with col1:
                         st.image(localized_rgb, caption=f"Localized {predicted_class}", use_column_width=True)
                     else:
                         st.warning("No clear pest localization found.")
-                    # Show boxed image
+                    # Show boxed image instead of heatmap
                     boxed_rgb = cv2.cvtColor(boxed_img, cv2.COLOR_BGR2RGB)
-                    st.image(boxed_rgb, caption="Image with Bounding Box", use_column_width=True)
+                    st.image(boxed_rgb, caption=f"Detected {predicted_class} with Bounding Box", use_column_width=True)
             except Exception as e:
-                st.warning(f"Explanation features unavailable: {e}")
+                st.warning(f"Localization unavailable: {e}")
 
 with col2:
     if uploaded_file is not None:
