@@ -1,7 +1,8 @@
 streamlit>=1.26.0
+pillow
+
 tensorflow==2.17.0
 numpy==1.26.4
-pillow==11.1.1
 requests==2.32.3
 opencv-python==4.10.0.84
 matplotlib==3.9.2
