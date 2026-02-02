@@ -1,4 +1,4 @@
-streamlit==1.39.0
+streamlit>=1.26.0
 tensorflow==2.17.0
 numpy==1.26.4
 pillow==11.1.1
@@ -8,4 +8,4 @@ matplotlib==3.9.2
 rich==13.7.1  # Downgrade if 14.x causes issues; Streamlit 1.39 supports <14.0
 markdown-it-py==3.0.0  # If 4.0.0 conflicts, but try 4.0.0 first
 mdurl==0.1.2
-pygments==2.18.0  # Slight downgrade if needed
+pygments==2.18.0  # Slight downgrade if neede
