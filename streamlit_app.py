@@ -1,263 +1,174 @@
 import streamlit as st
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing.image import img_to_array
 import numpy as np
 from PIL import Image
 import requests
 from io import BytesIO
-import tensorflow as tf
-from tensorflow.keras.preprocessing import image
 
-# App title and description
-st.set_page_config(
-    page_title="Pest Detection System",
-    page_icon="🐛",
-    layout="wide"
-)
+# -------------------------------
+# Model Loading (use caching for efficiency)
+# -------------------------------
+@st.cache_resource
+def load_pest_model():
+    url = "https://github.com/blurerjr/Explainable-Pest-Detection/releases/download/model/best_pest_model.keras"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        model_bytes = BytesIO(response.content)
+        model = tf.keras.models.load_model(model_bytes)
+        return model
+    except Exception as e:
+        st.error(f"Error loading model from URL: {e}")
+        st.stop()
 
-# Custom CSS for better styling
-st.markdown("""
-    <style>
-    .main {
-        background-color: #f8f9fa;
-    }
-    .stApp {
-        max-width: 1200px;
-        margin: 0 auto;
-    }
-    .result-container {
-        background-color: white;
-        border-radius: 10px;
-        padding: 20px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    .pest-info {
-        background-color: #e8f5e9;
-        border-radius: 10px;
-        padding: 20px;
-        margin-top: 20px;
-    }
-    .control-methods {
-        background-color: #e3f2fd;
-        border-radius: 10px;
-        padding: 20px;
-        margin-top: 20px;
-    }
-    .confidence-bar {
-        background-color: #e0e0e0;
-        border-radius: 5px;
-        height: 20px;
-        margin: 5px 0;
-    }
-    .confidence-fill {
-        background-color: #4caf50;
-        border-radius: 5px;
-        height: 100%;
-        transition: width 0.5s ease;
-    }
-    </style>
-""", unsafe_allow_html=True)
+model = load_pest_model()
 
-# Pest information dictionary
+# -------------------------------
+# Pest Classes (in the exact order your model expects)
+# -------------------------------
+classes = [
+    'aphids', 'armyworm', 'beetle', 'bollworm', 'catterpillar', 'earthworms',
+    'grasshopper', 'mites', 'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil'
+]
+
+# -------------------------------
+# Pest Information Dictionary (sourced from agricultural extension resources)
+# -------------------------------
 pest_info = {
     'aphids': {
-        'description': 'Small sap-sucking insects that can be green, black, or brown. They reproduce quickly and can cause stunted growth and curled leaves.',
-        'control': [
-            'Introduce natural predators like ladybugs or lacewings',
-            'Use insecticidal soap or neem oil',
-            'Remove heavily infested plants',
-            'Use reflective mulches to deter aphids'
-        ]
+        'details': 'Small, soft-bodied insects (plant lice) that cluster on new growth, stems, and under leaves. They have piercing-sucking mouthparts.',
+        'causes': 'Often introduced via infested transplants, weeds, or wind. Thrive in warm, dry conditions; high nitrogen fertilizers increase susceptibility.',
+        'control': 'Encourage natural enemies (ladybugs, lacewings). Use strong water sprays to dislodge them. Apply insecticidal soaps, neem oil, or horticultural oils. For severe cases, use targeted insecticides like flonicamid or acetamiprid. Avoid broad-spectrum insecticides to protect beneficial insects.'
     },
     'armyworm': {
-        'description': 'Caterpillars that feed on leaves and can cause significant defoliation. They are typically green or brown with stripes.',
-        'control': [
-            'Apply biological pesticides containing Bacillus thuringiensis (Bt)',
-            'Use pheromone traps to monitor and reduce populations',
-            'Encourage natural predators like birds and parasitic wasps',
-            'Rotate crops to disrupt their life cycle'
-        ]
+        'details': 'Larvae (caterpillars) of certain moths that feed aggressively in groups, causing defoliation. They chew on leaves, creating ragged edges.',
+        'causes': 'Moths migrate and lay eggs on crops like maize, rice, sorghum, vegetables. Warm, moist conditions favor outbreaks.',
+        'control': 'Scout regularly. Use Bacillus thuringiensis (Bt) for young larvae. Apply insecticides like chlorantraniliprole or lambda-cyhalothrin when thresholds are met. Promote early planting to avoid peak infestation periods.'
     },
     'beetle': {
-        'description': 'Hard-shelled insects with chewing mouthparts. Many species feed on leaves, stems, or roots.',
-        'control': [
-            'Handpick and remove beetles from plants',
-            'Use floating row covers to protect plants',
-            'Apply diatomaceous earth around plants',
-            'Introduce predatory insects like ground beetles'
-        ]
+        'details': 'Various species (e.g., leaf beetles, flea beetles) that chew holes in leaves or bore into stems/fruit.',
+        'causes': 'Overwinter in soil or crop residue; emerge in spring. Weeds serve as hosts.',
+        'control': 'Crop rotation, remove crop residue. Use row covers. Apply insecticides like carbaryl or pyrethroids when damage appears. Encourage predatory insects.'
     },
     'bollworm': {
-        'description': 'Larvae of moths that bore into buds and fruits, causing significant damage to crops like cotton and tomatoes.',
-        'control': [
-            'Use Bt (Bacillus thuringiensis) based insecticides',
-            'Implement crop rotation',
-            'Monitor with pheromone traps',
-            'Encourage natural predators like parasitic wasps'
-        ]
+        'details': 'Larvae (e.g., cotton bollworm / corn earworm) that bore into fruit, bolls, ears, causing direct damage and secondary infections.',
+        'causes': 'Moths lay eggs on flowering crops. Warm weather accelerates development.',
+        'control': 'Use Bt varieties where available. Scout for eggs/larvae. Apply targeted insecticides (e.g., indoxacarb, spinosad). Release Trichogramma wasps for biological control.'
     },
     'catterpillar': {
-        'description': 'Larval stage of butterflies and moths that feed on leaves, often causing skeletonization of foliage.',
-        'control': [
-            'Handpick and remove caterpillars',
-            'Use Bt (Bacillus thuringiensis) sprays',
-            'Encourage natural predators like birds',
-            'Apply neem oil to deter feeding'
-        ]
+        'details': 'General term for moth/butterfly larvae that chew leaves, bore into stems, or roll leaves with silk.',
+        'causes': 'Eggs laid on host plants; multiple generations per season in warm climates.',
+        'control': 'Hand-pick when possible. Use Bt sprays. Apply targeted insecticides. Encourage birds and parasitic wasps.'
     },
     'earthworms': {
-        'description': 'Beneficial soil organisms that improve soil structure and nutrient cycling. Typically not considered pests.',
-        'control': [
-            'No control needed - earthworms are beneficial',
-            'Maintain organic matter in soil to support earthworm populations',
-            'Avoid excessive tilling which can harm earthworms'
-        ]
+        'details': 'Usually beneficial soil engineers, but some species can damage seedlings or lawns in high numbers.',
+        'causes': 'Excessive moisture, organic matter, or over-irrigation.',
+        'control': 'Typically not needed. Reduce overwatering. Use carbaryl baits only if severe seedling damage occurs (rare).'
     },
     'grasshopper': {
-        'description': 'Jumping insects that feed on leaves, often causing significant defoliation in large numbers.',
-        'control': [
-            'Use floating row covers to protect plants',
-            'Apply diatomaceous earth to plant surfaces',
-            'Encourage natural predators like birds and spiders',
-            'Use baits containing Nosema locustae (a natural pathogen)'
-        ]
+        'details': 'Chewing insects that defoliate leaves, clip flowers/pods. Large populations cause major losses.',
+        'causes': 'Dry conditions favor outbreaks. Weeds/grasses serve as breeding sites.',
+        'control': 'Early season tillage to destroy eggs. Apply insecticides (e.g., diflubenzuron) around field borders. Use grasshopper baits. Encourage natural predators (birds, robber flies).'
     },
     'mites': {
-        'description': 'Tiny arachnids that suck plant juices, causing stippling, discoloration, and webbing on leaves.',
-        'control': [
-            'Spray plants with water to dislodge mites',
-            'Use insecticidal soap or neem oil',
-            'Introduce predatory mites',
-            'Maintain proper humidity levels'
-        ]
+        'details': 'Tiny arachnids (e.g., spider mites) that suck plant sap, causing stippling, yellowing, webbing.',
+        'causes': 'Hot, dry weather; pesticide overuse killing predators.',
+        'control': 'Increase humidity. Use miticides like abamectin or bifenazate. Apply insecticidal soap/oil. Release predatory mites (Phytoseiulus persimilis).'
     },
     'moth': {
-        'description': 'Adult stage of many pest caterpillars. While adults don't typically damage plants, their larvae can be destructive.',
-        'control': [
-            'Use pheromone traps to disrupt mating',
-            'Apply Bt (Bacillus thuringiensis) to target larvae',
-            'Encourage natural predators like bats and birds',
-            'Use light traps to monitor populations'
-        ]
+        'details': 'Adult stage often not damaging; larvae (caterpillars) cause harm (see armyworm, bollworm, etc.).',
+        'causes': 'Attracted to lights, flowering plants.',
+        'control': 'Pheromone traps for monitoring. Focus on larval control (Bt, targeted insecticides).'
     },
     'sawfly': {
-        'description': 'Larvae resemble caterpillars but are actually wasp relatives. They feed on leaves, often skeletonizing them.',
-        'control': [
-            'Handpick and remove larvae',
-            'Use insecticidal soap or horticultural oil',
-            'Encourage natural predators like birds and parasitic wasps',
-            'Apply spinosad-based insecticides'
-        ]
+        'details': 'Larvae resemble caterpillars but are fly relatives; they chew leaves or bore into stems.',
+        'causes': 'Overwinter in soil; emerge in spring.',
+        'control': 'Remove infested parts. Apply insecticides like spinosad or carbaryl. Encourage natural enemies.'
     },
     'stem_borer': {
-        'description': 'Larvae that bore into stems, causing wilting and plant death. Common in crops like maize and sugarcane.',
-        'control': [
-            'Use stem injections with insecticides',
-            'Practice crop rotation',
-            'Remove and destroy infested plant material',
-            'Use resistant crop varieties'
-        ]
+        'details': 'Larvae bore into stems, causing wilting, dead hearts, reduced yield.',
+        'causes': 'Eggs laid on leaves; larvae tunnel inside. Multiple crops affected (rice, maize, sugarcane).',
+        'control': 'Use resistant varieties. Apply systemic insecticides at early infestation. Destroy crop residue. Release parasitic wasps (e.g., Cotesia).'
     },
     'wasp': {
-        'description': 'Some wasp species can be beneficial predators, while others may damage fruits or be aggressive.',
-        'control': [
-            'Use traps with protein baits in spring',
-            'Remove nests when found',
-            'Encourage natural predators like birds',
-            'Use insecticidal dusts in nest entrances'
-        ]
+        'details': 'Most are beneficial (parasitic wasps control pests); some (e.g., gall wasps) cause plant galls.',
+        'causes': 'Diverse habitats; some attracted to certain plants.',
+        'control': 'Usually not needed. Protect beneficial species. Remove galls if aesthetic issue.'
     },
     'weevil': {
-        'description': 'Beetles with elongated snouts that feed on plants, often causing distinctive notching on leaf edges.',
-        'control': [
-            'Use beneficial nematodes for soil-dwelling larvae',
-            'Apply diatomaceous earth',
-            'Use pheromone traps',
-            'Practice crop rotation'
-        ]
+        'details': 'Snout beetles; adults chew leaves, larvae bore into seeds, stems, roots (e.g., boll weevil, grain weevil).',
+        'causes': 'Overwinter in residue; emerge in warm weather.',
+        'control': 'Crop rotation. Use pheromone traps. Apply insecticides (e.g., malathion for stored grain). Destroy infested material.'
     }
 }
 
-# Load the model
-@st.cache_resource
-def load_model():
-    model_url = "https://github.com/blurerjr/Explainable-Pest-Detection/releases/download/model/best_pest_model.keras"
-    response = requests.get(model_url)
-    model = tf.keras.models.load_model(BytesIO(response.content))
-    return model
+# -------------------------------
+# Streamlit App Layout
+# -------------------------------
+st.set_page_config(page_title="Pest Detection App", page_icon="🐛", layout="wide")
 
-model = load_model()
+st.title("🐛 Pest Detection & Management Advisor")
+st.markdown("Upload an image of a pest-affected plant or insect. The model will detect the pest type and provide detailed control recommendations.")
 
-# Pest classes
-classes = ['aphids', 'armyworm', 'beetle', 'bollworm',
-           'catterpillar', 'earthworms', 'grasshopper', 'mites',
-           'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil']
+# Main layout: two columns
+col1, col2 = st.columns([1, 1])
 
-# Image preprocessing function
-def preprocess_image(img):
-    img = img.resize((224, 224))
-    img_array = image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array /= 255.0
-    return img_array
+with col1:
+    st.subheader("Upload Image")
+    uploaded_file = st.file_uploader(
+        "Choose an image (jpg, jpeg, png)",
+        type=["jpg", "jpeg", "png"],
+        help="Upload a clear image of the pest or affected plant part."
+    )
 
-# Main app
-def main():
-    st.title("🐛 Pest Detection System")
-    st.markdown("""
-    Upload an image of a plant pest, and our AI will identify it and provide information about the pest and control methods.
-    """)
-
-    col1, col2 = st.columns([1, 1])
-
-    with col1:
-        st.subheader("Upload Image")
-        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
-
-        if uploaded_file is not None:
-            # Display the uploaded image
+    if uploaded_file is not None:
+        try:
             img = Image.open(uploaded_file)
             st.image(img, caption="Uploaded Image", use_column_width=True)
 
-            # Preprocess and predict
-            img_array = preprocess_image(img)
-            predictions = model.predict(img_array)
-            predicted_class = classes[np.argmax(predictions[0])]
-            confidence = np.max(predictions[0]) * 100
+            # Preprocess
+            img_resized = img.resize((224, 224))
+            img_array = img_to_array(img_resized)
+            img_array = np.expand_dims(img_array, axis=0)
+            img_array /= 255.0  # Normalize
 
-    with col2:
-        if uploaded_file is not None:
-            st.subheader("Detection Results")
+            # Predict
+            with st.spinner("Detecting pest..."):
+                prediction = model.predict(img_array)
+                predicted_class_idx = np.argmax(prediction)
+                confidence = float(np.max(prediction)) * 100
+                predicted_pest = classes[predicted_class_idx]
 
-            # Display prediction
-            st.write(f"### Detected Pest: **{predicted_class.replace('_', ' ').title()}**")
-            st.write(f"### Confidence: **{confidence:.2f}%**")
+            st.success("Detection Complete!")
+            st.metric(label="Detected Pest", value=predicted_pest.capitalize(), delta=f"{confidence:.2f}% Confidence")
 
-            # Confidence bar
-            st.markdown(f"""
-            <div class="confidence-bar">
-                <div class="confidence-fill" style="width: {confidence}%"></div>
-            </div>
-            """, unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Error processing image: {e}")
 
-            # Pest information
-            if predicted_class in pest_info:
-                st.markdown(f"""
-                <div class="pest-info">
-                    <h3>About {predicted_class.replace('_', ' ').title()}</h3>
-                    <p>{pest_info[predicted_class]['description']}</p>
-                </div>
-                """, unsafe_allow_html=True)
+with col2:
+    st.subheader("Pest Information & Control")
+    
+    if 'predicted_pest' in locals():
+        if predicted_pest in pest_info:
+            info = pest_info[predicted_pest]
+            
+            st.markdown(f"### {predicted_pest.capitalize()}")
+            with st.expander("Details", expanded=True):
+                st.write(info['details'])
+            with st.expander("Probable Causes"):
+                st.write(info['causes'])
+            with st.expander("How to Control (Efficient Methods)"):
+                st.write(info['control'])
+            
+            st.info("**Tip**: Always scout fields regularly, use integrated pest management (IPM), and consult local extension services for region-specific advice.")
+        else:
+            st.warning("No detailed information available for this class.")
+    else:
+        st.info("Upload an image to see pest details and management strategies.")
 
-                # Control methods
-                st.markdown(f"""
-                <div class="control-methods">
-                    <h3>Control Methods</h3>
-                    <ul>
-                        {"".join([f"<li>{method}</li>" for method in pest_info[predicted_class]['control']])}
-                    </ul>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.warning("Information about this pest is not available in our database.")
-
-if __name__ == "__main__":
-    main()
+# Footer
+st.markdown("---")
+st.caption("Model: Custom-trained Keras model | Input size: 224×224 | Classes: 13 common pests")
+st.caption("Built with Streamlit • For educational and agricultural advisory use")
