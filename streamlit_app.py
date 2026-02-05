@@ -5,152 +5,128 @@ from PIL import Image
 import requests
 import os
 import cv2
-
-# tf-keras-vis imports (keep for now)
-from tf_keras_vis.gradcam import Gradcam
-from tf_keras_vis.utils.scores import CategoricalScore
+from ultralytics import YOLO
 
 # Custom CSS
 st.markdown("""
     <style>
     .main {background-color: #f8f9fa;}
-    .stButton>button {background-color: #28a745; color: white; border: none;}
+    .stButton>button {background-color: #28a745; color: white;}
     .stFileUploader {border: 2px dashed #6c757d; padding: 20px; text-align: center; border-radius: 10px;}
     .prediction {font-size: 28px; font-weight: bold; color: #155724; text-align: center;}
     </style>
 """, unsafe_allow_html=True)
 
-# Model URL and path
-model_url = "https://github.com/blurerjr/Explainable-Pest-Detection/releases/download/model/best_pest_model.keras"
-model_path = "best_pest_model.keras"
+# ── 1. Your Classification Model ──
+MODEL_URL = "https://github.com/blurerjr/Explainable-Pest-Detection/releases/download/model/best_pest_model.keras"
+MODEL_PATH = "best_pest_model.keras"
 
-if not os.path.exists(model_path):
-    with st.spinner("Downloading model..."):
-        response = requests.get(model_url)
-        if response.status_code == 200:
-            with open(model_path, 'wb') as f:
-                f.write(response.content)
-            st.success("Model downloaded!")
+if not os.path.exists(MODEL_PATH):
+    with st.spinner("Downloading classification model..."):
+        r = requests.get(MODEL_URL)
+        if r.status_code == 200:
+            with open(MODEL_PATH, 'wb') as f:
+                f.write(r.content)
         else:
-            st.error("Download failed")
+            st.error("Failed to download classification model")
             st.stop()
 
 try:
-    model = tf.keras.models.load_model(model_path)
+    clf_model = tf.keras.models.load_model(MODEL_PATH)
 except Exception as e:
-    st.error(f"Model load error: {e}")
+    st.error(f"Classification model load failed: {e}")
     st.stop()
 
-class_names = ['aphids', 'armyworm', 'beetle', 'bollworm', 'catterpillar', 'earthworms',
-               'grasshopper', 'mites', 'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil']
+CLASS_NAMES = [
+    'aphids', 'armyworm', 'beetle', 'bollworm', 'catterpillar', 'earthworms',
+    'grasshopper', 'mites', 'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil'
+]
 
-# Hardcoded for ResNet50V2
-last_conv_layer_name = "conv5_block3_out"
+# ── 2. YOLOv8 Segmentation Model (pre-trained) ──
+@st.cache_resource
+def load_yolo_seg():
+    # Use nano-seg for speed on Streamlit Cloud (or 'yolov8s-seg.pt' for better accuracy)
+    return YOLO("yolov8n-seg.pt")  # auto-downloads from Ultralytics release
 
-st.info(f"Using Grad-CAM layer: **{last_conv_layer_name}**")
+yolo_seg = load_yolo_seg()
 
-# Localization function (unchanged)
-def localize_pest(img_cv, heatmap, threshold=0.5, min_area_ratio=0.005):
-    h, w = img_cv.shape[:2]
-    heatmap_resized = cv2.resize(heatmap, (w, h))
-    heatmap_resized = cv2.normalize(heatmap_resized, None, 0, 1, cv2.NORM_MINMAX)
-    
-    _, mask = cv2.threshold(heatmap_resized, threshold, 1, cv2.THRESH_BINARY)
-    mask = (mask * 255).astype(np.uint8)
-    
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None, img_cv
-    
-    filtered = [c for c in contours if cv2.contourArea(c) > min_area_ratio * h * w]
-    if not filtered:
-        return None, img_cv
-    
-    largest = max(filtered, key=cv2.contourArea)
-    x, y, w_box, h_box = cv2.boundingRect(largest)
-    
-    expand = 15
-    x = max(0, x - expand)
-    y = max(0, y - expand)
-    w_box += 2 * expand
-    h_box += 2 * expand
-    x2 = min(w, x + w_box)
-    y2 = min(h, y + h_box)
-    
-    boxed_img = img_cv.copy()
-    cv2.rectangle(boxed_img, (x, y), (x2, y2), (0, 255, 0), 3)
-    cropped = img_cv[y:y2, x:x2]
-    return cropped, boxed_img
+# ── App ──
+st.set_page_config(page_title="Pest Classifier + Segmenter", layout="wide", page_icon="🦟")
+st.title("🦟 Pest Classification & Segmentation")
 
-# App config
-st.set_page_config(page_title="Pest Detector", layout="wide", page_icon="🦟")
-st.title("🦟 Pest Detection with Bounding Box")
-
-with st.sidebar:
-    st.header("Controls")
-    show_localization = st.checkbox("Show Cropped Pest", value=True)
-    show_probs = st.checkbox("Show Probabilities", value=False)
-    box_threshold = st.slider("Box Threshold", 0.3, 0.8, 0.50, 0.05)
-    min_area_ratio = st.slider("Min Area Ratio", 0.001, 0.03, 0.005, 0.001)
+st.info("""
+Two-model pipeline:  
+• Your ResNet50V2 model → classifies the pest  
+• YOLOv8-seg (pre-trained) → segments the pest region (mask + box)
+""")
 
 col1, col2 = st.columns([3, 2])
 
 with col1:
-    st.subheader("Upload Image")
-    uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+    uploaded_file = st.file_uploader("Upload pest image", type=["jpg", "jpeg", "png"])
 
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
+        img_np = np.array(image)
+
         st.image(image, caption="Uploaded Image", use_column_width=True)
 
         with st.spinner("Processing..."):
+            # Step 1: Classification (your model)
             img_resized = image.resize((224, 224))
             img_array = np.array(img_resized, dtype=np.float32) / 255.0
-            img_array_exp = np.expand_dims(img_array, axis=0)
+            img_array = np.expand_dims(img_array, 0)
 
-            predictions = model.predict(img_array_exp)
-            pred_index = np.argmax(predictions[0])
-            predicted_class = class_names[pred_index]
-            confidence = predictions[0][pred_index] * 100
+            preds = clf_model.predict(img_array)
+            pred_idx = np.argmax(preds[0])
+            predicted_class = CLASS_NAMES[pred_idx]
+            confidence = preds[0][pred_idx] * 100
 
-            try:
-                gradcam = Gradcam(model)
-                score = CategoricalScore([pred_index])
+            # Step 2: Segmentation with YOLOv8-seg
+            results = yolo_seg(img_np, verbose=False)
 
-                cam = gradcam(score, img_array_exp, penultimate_layer=last_conv_layer_name, seek_penultimate_conv_layer=False)
-                heatmap = cam[0]
+            # Get the first result (usually the best detection)
+            if len(results) > 0 and results[0].masks is not None:
+                masks = results[0].masks.data  # tensor of masks
+                boxes = results[0].boxes.xyxy.cpu().numpy()  # bounding boxes
 
-                img_cv = cv2.cvtColor(np.array(img_resized), cv2.COLOR_RGB2BGR)
-                cropped, boxed_img = localize_pest(img_cv, heatmap, box_threshold, min_area_ratio)
+                # Use the mask with the highest confidence (or largest area)
+                if len(masks) > 0:
+                    mask = masks[0].cpu().numpy()  # take first mask for simplicity
+                    # Create colored overlay
+                    mask_color = np.zeros_like(img_np)
+                    mask_color[mask > 0.5] = (0, 255, 0)  # green mask
 
-                boxed_rgb = cv2.cvtColor(boxed_img, cv2.COLOR_BGR2RGB)
-                st.image(boxed_rgb, caption=f"Detected: {predicted_class}", use_column_width=True)
+                    # Blend mask with original image
+                    alpha = 0.4
+                    overlay = cv2.addWeighted(img_np, 1 - alpha, mask_color, alpha, 0)
 
-                if show_localization and cropped is not None:
-                    cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
-                    st.image(cropped_rgb, caption="Localized Pest (cropped)", width=300)
+                    # Draw bounding box (optional)
+                    if len(boxes) > 0:
+                        x1, y1, x2, y2 = map(int, boxes[0][:4])
+                        cv2.rectangle(overlay, (x1, y1), (x2, y2), (255, 0, 0), 3)
 
-            except Exception as e:
-                st.warning(f"Grad-CAM failed: {str(e)[:150]}... Showing prediction only.")
-                st.image(image, caption=f"Prediction: {predicted_class}", use_column_width=True)
+                    st.image(overlay, caption=f"Segmented Pest (YOLOv8-seg mask + box)", use_column_width=True)
+
+                    # Optional: show binary mask
+                    if st.checkbox("Show binary mask only"):
+                        binary_mask = (mask > 0.5).astype(np.uint8) * 255
+                        st.image(binary_mask, caption="Binary Pest Mask", use_column_width=True, clamp=True)
+                else:
+                    st.warning("No mask detected by YOLOv8-seg")
+            else:
+                st.warning("No detection by YOLOv8-seg → only classification available")
 
 with col2:
     if uploaded_file is not None:
-        st.subheader("Result")
+        st.subheader("Classification Result")
         st.markdown(f"<div class='prediction'>{predicted_class}</div>", unsafe_allow_html=True)
         st.markdown(f"**Confidence:** {confidence:.2f}%")
 
-        if show_probs:
-            with st.expander("Probabilities"):
-                for i, p in enumerate(predictions[0]):
-                    st.write(f"{class_names[i]}: {p*100:.2f}%")
+        with st.expander("All Probabilities"):
+            for i, p in enumerate(preds[0]):
+                st.write(f"{CLASS_NAMES[i]}: {p*100:.2f}%")
 
-        if st.button("Download Summary"):
-            summary = f"Pest: {predicted_class}\nConfidence: {confidence:.2f}%"
-            st.download_button("Download", summary, "pest_result.txt")
+        st.caption("YOLOv8-seg provides segmentation (green mask) and bounding box (blue)")
 
-st.caption("ResNet50V2 model • Grad-CAM localization")
+st.caption("Classification: your custom ResNet50V2 • Segmentation: pre-trained YOLOv8n-seg (Ultralytics)")
