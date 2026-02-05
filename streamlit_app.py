@@ -49,18 +49,34 @@ class_names = [
     'grasshopper', 'mites', 'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil'
 ]
 
-# Find the last convolutional layer automatically
+# Find the last convolutional layer (recursive search for nested models)
 def get_last_conv_layer(model):
-    for layer in reversed(model.layers):
-        if isinstance(layer, (tf.keras.layers.Conv2D, 
-                            tf.keras.layers.DepthwiseConv2D, 
-                            tf.keras.layers.SeparableConv2D)):
-            return layer.name
-    return None
+    """
+    Recursively find the last Conv2D (or similar) layer in the model,
+    including inside nested base models like ResNet50V2.
+    """
+    def find_in_layers(layers):
+        for layer in reversed(layers):
+            if isinstance(layer, (tf.keras.layers.Conv2D, 
+                                 tf.keras.layers.DepthwiseConv2D, 
+                                 tf.keras.layers.SeparableConv2D)):
+                return layer.name
+            # If it's a model itself (like ResNet50V2), go deeper
+            if hasattr(layer, 'layers'):
+                found = find_in_layers(layer.layers)
+                if found:
+                    return found
+        return None
+
+    return find_in_layers(model.layers)
+
 
 last_conv_layer_name = get_last_conv_layer(model)
-if last_conv_layer_name is None:
-    st.warning("No convolutional layer found in the model. Grad-CAM will be disabled.")
+
+if last_conv_layer_name:
+    st.info(f"Using Grad-CAM layer: **{last_conv_layer_name}**")
+else:
+    st.warning("No convolutional layer found — localization will be disabled.")
 
 # Improved bounding box extraction from heatmap
 def localize_pest(img_cv, heatmap, threshold=0.5, min_area_ratio=0.005):
@@ -87,7 +103,7 @@ def localize_pest(img_cv, heatmap, threshold=0.5, min_area_ratio=0.005):
     largest_contour = max(filtered_contours, key=cv2.contourArea)
     x, y, w_box, h_box = cv2.boundingRect(largest_contour)
     
-    # Slightly expand box
+    # Slightly expand box for better visibility
     expand = 15
     x = max(0, x - expand)
     y = max(0, y - expand)
@@ -177,8 +193,7 @@ with col1:
                     st.image(cropped_rgb, caption=f"Localized {predicted_class} (cropped)", width=300)
 
             except Exception as e:
-                st.warning(f"Grad-CAM failed: {str(e)[:150]}... Showing prediction only.")
-                # Fallback: show original image
+                st.warning(f"Grad-CAM failed: {str(e)[:180]}... Showing prediction only.")
                 st.image(image, caption=f"Prediction: {predicted_class} (no localization)", use_column_width=True)
 
 with col2:
@@ -197,4 +212,4 @@ with col2:
             st.download_button("Download", summary, file_name="pest_result.txt")
 
 st.markdown("---")
-st.caption("Powered by custom model • Localization via Grad-CAM (tf-keras-vis)")
+st.caption("Powered by ResNet50V2-based model • Localization via Grad-CAM (tf-keras-vis)")
