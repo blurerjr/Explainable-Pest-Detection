@@ -4,18 +4,19 @@ import numpy as np
 from PIL import Image
 import requests
 import os
+import cv2
 
-# Custom CSS for a beautiful, modern look
+# tf-keras-vis imports
+from tf_keras_vis.gradcam import Gradcam
+from tf_keras_vis.utils.scores import CategoricalScore
+
+# Custom CSS for a nicer look
 st.markdown("""
     <style>
     .main {background-color: #f8f9fa;}
-    h1 {color: #2c3e50; text-align: center;}
-    .stButton>button {background-color: #27ae60; color: white; border: none; padding: 10px 20px; font-size: 16px;}
-    .stButton>button:hover {background-color: #219653;}
-    .upload-box {border: 2px dashed #bdc3c7; border-radius: 10px; padding: 30px; text-align: center; background-color: #ecf0f1; margin: 20px 0;}
-    .prediction-box {background-color: #e8f5e9; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin: 20px 0;}
-    .info-box {background-color: #fff3e0; padding: 15px; border-radius: 8px; margin-top: 20px;}
-    .confidence {font-size: 28px; font-weight: bold; color: #27ae60;}
+    .stButton>button {background-color: #28a745; color: white; border: none;}
+    .stFileUploader {border: 2px dashed #6c757d; padding: 20px; text-align: center; border-radius: 10px;}
+    .prediction {font-size: 28px; font-weight: bold; color: #155724; text-align: center;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -25,14 +26,14 @@ model_path = "best_pest_model.keras"
 
 # Download model if not present
 if not os.path.exists(model_path):
-    with st.spinner("Downloading intelligent pest detection model..."):
+    with st.spinner("Downloading model weights..."):
         response = requests.get(model_url)
         if response.status_code == 200:
             with open(model_path, 'wb') as f:
                 f.write(response.content)
-            st.success("Model ready!")
+            st.success("Model downloaded!")
         else:
-            st.error("Failed to download model. Please check your connection.")
+            st.error(f"Download failed (status: {response.status_code})")
             st.stop()
 
 # Load model
@@ -43,122 +44,135 @@ except Exception as e:
     st.stop()
 
 # Pest classes
-class_names = ['aphids', 'armyworm', 'beetle', 'bollworm', 'catterpillar', 'earthworms', 'grasshopper', 'mites', 'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil']
+class_names = [
+    'aphids', 'armyworm', 'beetle', 'bollworm', 'catterpillar', 'earthworms',
+    'grasshopper', 'mites', 'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil'
+]
 
-# Simple explanations & prevention tips (based on common agricultural knowledge)
-pest_info = {
-    'aphids': {
-        'desc': "Small, soft-bodied insects that suck sap from plants, causing curled leaves, stunted growth, and honeydew (sticky residue) that attracts ants and promotes sooty mold.",
-        'prevent': "Encourage natural predators (ladybugs, lacewings), avoid excess nitrogen fertilizer, use reflective mulches, spray strong water jets to dislodge them, or apply insecticidal soap/oil early."
-    },
-    'armyworm': {
-        'desc': "Caterpillars that march in groups ('armies'), chewing large holes in leaves, often defoliating crops like maize, rice, and pastures.",
-        'prevent': "Scout fields regularly, use trap crops (e.g., Napier grass), promote beneficial insects, apply Bacillus thuringiensis (Bt) for young larvae, deep ploughing to expose pupae, and avoid broad-spectrum insecticides to preserve natural enemies."
-    },
-    'beetle': {
-        'desc': "Various beetles (e.g., leaf beetles, flea beetles) chew holes in leaves, sometimes defoliating plants or damaging roots/flowers.",
-        'prevent': "Crop rotation, remove crop residues, use row covers, encourage predatory insects, and apply targeted insecticides only when thresholds are exceeded."
-    },
-    'bollworm': {
-        'desc': "Larvae bore into bolls/fruits (especially cotton, tomatoes, okra), causing fruit drop, reduced yield, and entry points for rot fungi.",
-        'prevent': "Use Bt cotton varieties if available, scout for eggs/young larvae, destroy infested plant parts, encourage natural enemies (parasitic wasps), and time planting to avoid peak moth flights."
-    },
-    'catterpillar': {
-        'desc': "Chewing larvae of moths/butterflies that eat leaves, bore into stems/fruits, leading to defoliation and reduced photosynthesis/yield.",
-        'prevent': "Hand-pick visible caterpillars, use Bt sprays, release Trichogramma wasps, practice crop rotation, and maintain field sanitation."
-    },
-    'earthworms': {
-        'desc': "Usually beneficial (improve soil), but some species can damage seedlings by feeding on roots or dragging leaves underground.",
-        'prevent': "Rarely a major pest; maintain healthy soil biology, avoid overwatering, and use barriers for seedlings if needed."
-    },
-    'grasshopper': {
-        'desc': "Chew irregular holes in leaves and can defoliate plants in large numbers during outbreaks.",
-        'prevent': "Early tillage to destroy eggs, encourage natural predators (birds, robber flies), use bait traps, and apply insecticides only during outbreaks."
-    },
-    'mites': {
-        'desc': "Tiny arachnids that suck plant juices, causing stippling, yellowing, webbing, and leaf drop (e.g., spider mites).",
-        'prevent': "Increase humidity, avoid dust, release predatory mites (e.g., Phytoseiulus), use miticidal soaps/oils, and monitor hot/dry conditions."
-    },
-    'moth': {
-        'desc': "Adult moths lay eggs that hatch into damaging caterpillars; adults rarely cause direct damage.",
-        'prevent': "Pheromone traps for monitoring, Bt for larvae, light traps, and habitat management for natural enemies."
-    },
-    'sawfly': {
-        'desc': "Larvae resemble caterpillars and chew leaves/needles, often in groups, defoliating trees/shrubs.",
-        'prevent': "Hand removal of larvae clusters, encourage birds/parasitoids, prune affected parts, and use selective insecticides."
-    },
-    'stem_borer': {
-        'desc': "Larvae bore into stems, causing dead hearts, wilting, reduced tillering, and yield loss (common in rice, maize).",
-        'prevent': "Use resistant varieties, destroy stubble, early planting, release egg parasitoids (Trichogramma), and apply granular insecticides if needed."
-    },
-    'wasp': {
-        'desc': "Some parasitic wasps are beneficial; pest wasps may sting or rarely damage crops directly.",
-        'prevent': "Usually not a crop pest; focus on beneficial species preservation."
-    },
-    'weevil': {
-        'desc': "Beetles with snouts; larvae bore into stems, roots, seeds, or fruits (e.g., rice weevil, boll weevil).",
-        'prevent': "Sanitation (remove residues), crop rotation, use resistant varieties, store grains properly, and apply targeted controls."
-    }
-}
+# Improved bounding box extraction from heatmap
+def localize_pest(img_cv, heatmap, threshold=0.5, min_area_ratio=0.005):
+    h, w = img_cv.shape[:2]
+    heatmap_resized = cv2.resize(heatmap, (w, h))
+    heatmap_resized = cv2.normalize(heatmap_resized, None, 0, 1, cv2.NORM_MINMAX)
+    
+    _, mask = cv2.threshold(heatmap_resized, threshold, 1, cv2.THRESH_BINARY)
+    mask = (mask * 255).astype(np.uint8)
+    
+    # Clean mask
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None, img_cv
+    
+    filtered_contours = [c for c in contours if cv2.contourArea(c) > min_area_ratio * h * w]
+    if not filtered_contours:
+        return None, img_cv
+    
+    largest_contour = max(filtered_contours, key=cv2.contourArea)
+    x, y, w_box, h_box = cv2.boundingRect(largest_contour)
+    
+    # Slightly expand box for better visibility
+    expand = 15
+    x = max(0, x - expand)
+    y = max(0, y - expand)
+    w_box += 2 * expand
+    h_box += 2 * expand
+    x2 = min(w, x + w_box)
+    y2 = min(h, y + h_box)
+    
+    boxed_img = img_cv.copy()
+    cv2.rectangle(boxed_img, (x, y), (x2, y2), (0, 255, 0), 3)
+    
+    cropped = img_cv[y:y2, x:x2]
+    return cropped, boxed_img
 
 # App layout
-st.set_page_config(page_title="Smart Pest Detector", layout="wide", page_icon="🪲")
+st.set_page_config(page_title="Pest Detector", layout="wide", page_icon="🦟")
+st.title("🦟 Pest Detection with Bounding Box")
 
-st.title("🪲 Smart Pest Detector – Identify & Protect Your Crops")
+# Sidebar controls
+with st.sidebar:
+    st.header("Controls")
+    show_localization = st.checkbox("Show Localized Pest (Crop)", value=True)
+    show_probs = st.checkbox("Show All Class Probabilities", value=False)
+    box_threshold = st.slider("Box Detection Threshold", 0.3, 0.8, 0.50, 0.05)
+    min_area_ratio = st.slider("Min Area Ratio", 0.001, 0.03, 0.005, 0.001)
 
 # Two-column layout
 col1, col2 = st.columns([3, 2])
 
 with col1:
-    st.subheader("Upload Your Crop/Pest Image")
-    with st.container():
-        st.markdown('<div class="upload-box">', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Drop image here or click to browse (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
-        st.markdown('</div>', unsafe_allow_html=True)
+    st.subheader("Upload Image")
+    uploaded_file = st.file_uploader(
+        "Drop image here or click to browse", 
+        type=["jpg", "jpeg", "png"],
+        label_visibility="collapsed"
+    )
 
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        st.image(image, caption="Your uploaded image", use_column_width=True)
+        st.image(image, caption="Uploaded Image", use_column_width=True)
 
-        with st.spinner("Analyzing image..."):
+        with st.spinner("Analyzing..."):
             # Preprocess
             img_resized = image.resize((224, 224))
             img_array = np.array(img_resized) / 255.0
-            img_array = np.expand_dims(img_array, axis=0)
+            img_array_exp = np.expand_dims(img_array, axis=0)  # batch
 
             # Predict
-            predictions = model.predict(img_array)
-            predicted_index = np.argmax(predictions, axis=1)[0]
-            predicted_class = class_names[predicted_index]
-            confidence = np.max(predictions) * 100
+            predictions = model.predict(img_array_exp)
+            pred_index = np.argmax(predictions[0])
+            predicted_class = class_names[pred_index]
+            confidence = predictions[0][pred_index] * 100
+
+            # Use tf-keras-vis Grad-CAM
+            try:
+                gradcam = Gradcam(model)
+                score = CategoricalScore([pred_index])  # target the predicted class
+                cam = gradcam(score, img_array_exp, penultimate_layer=-1, seek_penultimate_conv_layer=True)
+                heatmap = cam[0]  # shape: (H, W)
+
+                # Prepare OpenCV image
+                img_cv = np.array(img_resized)
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+
+                # Localize → get box and cropped region
+                cropped, boxed_img = localize_pest(
+                    img_cv, 
+                    heatmap, 
+                    threshold=box_threshold, 
+                    min_area_ratio=min_area_ratio
+                )
+
+                # Show image with bounding box
+                boxed_rgb = cv2.cvtColor(boxed_img, cv2.COLOR_BGR2RGB)
+                st.image(boxed_rgb, caption=f"Detected: {predicted_class}", use_column_width=True)
+
+                if show_localization and cropped is not None:
+                    cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+                    st.image(cropped_rgb, caption=f"Localized {predicted_class} (cropped)", width=300)
+
+            except Exception as e:
+                st.warning(f"Grad-CAM failed: {e}\nFalling back to prediction only.")
 
 with col2:
     if uploaded_file is not None:
-        st.subheader("Detection Result")
-        st.markdown('<div class="prediction-box">', unsafe_allow_html=True)
-        st.markdown(f"<h2 style='color: #27ae60;'>{predicted_class.capitalize()}</h2>", unsafe_allow_html=True)
-        st.markdown(f"<p class='confidence'>{confidence:.1f}% Confidence</p>", unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.subheader("Result")
+        st.markdown(f"<div class='prediction'>{predicted_class}</div>", unsafe_allow_html=True)
+        st.markdown(f"**Confidence:** {confidence:.2f}%", unsafe_allow_html=True)
 
-        # Explanation section
-        if predicted_class in pest_info:
-            info = pest_info[predicted_class]
-            st.markdown('<div class="info-box">', unsafe_allow_html=True)
-            st.subheader("About This Pest")
-            st.write(info['desc'])
-            st.subheader("How to Prevent & Control It")
-            st.write(info['prevent'])
-            st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            st.info("Basic info coming soon for this pest!")
+        if show_probs:
+            with st.expander("Detailed Probabilities"):
+                for i, prob in enumerate(predictions[0]):
+                    st.write(f"{class_names[i]}: {prob*100:.2f}%")
 
-        # Optional details
-        if st.checkbox("View probability breakdown"):
-            with st.expander("All Class Probabilities"):
-                probs = predictions[0]
-                for i, prob in enumerate(probs):
-                    st.write(f"{class_names[i].capitalize()}: {prob * 100:.1f}%")
+        # Download option
+        if st.button("Download Result Summary"):
+            summary = f"Pest: {predicted_class}\nConfidence: {confidence:.2f}%"
+            st.download_button("Download", summary, file_name="pest_result.txt")
 
-# Footer / call to action
 st.markdown("---")
-st.caption("Powered by AI • Built for farmers & gardeners • Early detection saves crops!")
+st.caption("Powered by your custom model + tf-keras-vis Grad-CAM for explainability")
