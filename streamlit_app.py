@@ -10,7 +10,7 @@ import cv2
 from tf_keras_vis.gradcam import Gradcam
 from tf_keras_vis.utils.scores import CategoricalScore
 
-# Custom CSS for a nicer look
+# Custom CSS for better appearance
 st.markdown("""
     <style>
     .main {background-color: #f8f9fa;}
@@ -49,6 +49,19 @@ class_names = [
     'grasshopper', 'mites', 'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil'
 ]
 
+# Find the last convolutional layer automatically
+def get_last_conv_layer(model):
+    for layer in reversed(model.layers):
+        if isinstance(layer, (tf.keras.layers.Conv2D, 
+                            tf.keras.layers.DepthwiseConv2D, 
+                            tf.keras.layers.SeparableConv2D)):
+            return layer.name
+    return None
+
+last_conv_layer_name = get_last_conv_layer(model)
+if last_conv_layer_name is None:
+    st.warning("No convolutional layer found in the model. Grad-CAM will be disabled.")
+
 # Improved bounding box extraction from heatmap
 def localize_pest(img_cv, heatmap, threshold=0.5, min_area_ratio=0.005):
     h, w = img_cv.shape[:2]
@@ -58,7 +71,7 @@ def localize_pest(img_cv, heatmap, threshold=0.5, min_area_ratio=0.005):
     _, mask = cv2.threshold(heatmap_resized, threshold, 1, cv2.THRESH_BINARY)
     mask = (mask * 255).astype(np.uint8)
     
-    # Clean mask
+    # Clean up mask
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
@@ -74,7 +87,7 @@ def localize_pest(img_cv, heatmap, threshold=0.5, min_area_ratio=0.005):
     largest_contour = max(filtered_contours, key=cv2.contourArea)
     x, y, w_box, h_box = cv2.boundingRect(largest_contour)
     
-    # Slightly expand box for better visibility
+    # Slightly expand box
     expand = 15
     x = max(0, x - expand)
     y = max(0, y - expand)
@@ -96,10 +109,10 @@ st.title("🦟 Pest Detection with Bounding Box")
 # Sidebar controls
 with st.sidebar:
     st.header("Controls")
-    show_localization = st.checkbox("Show Localized Pest (Crop)", value=True)
+    show_localization = st.checkbox("Show Localized Pest (Cropped)", value=True)
     show_probs = st.checkbox("Show All Class Probabilities", value=False)
     box_threshold = st.slider("Box Detection Threshold", 0.3, 0.8, 0.50, 0.05)
-    min_area_ratio = st.slider("Min Area Ratio", 0.001, 0.03, 0.005, 0.001)
+    min_area_ratio = st.slider("Min Area Ratio (for small pests)", 0.001, 0.03, 0.005, 0.001)
 
 # Two-column layout
 col1, col2 = st.columns([3, 2])
@@ -117,10 +130,10 @@ with col1:
         st.image(image, caption="Uploaded Image", use_column_width=True)
 
         with st.spinner("Analyzing..."):
-            # Preprocess
+            # Preprocess with explicit float32
             img_resized = image.resize((224, 224))
-            img_array = np.array(img_resized) / 255.0
-            img_array_exp = np.expand_dims(img_array, axis=0)  # batch
+            img_array = np.array(img_resized, dtype=np.float32) / 255.0
+            img_array_exp = np.expand_dims(img_array, axis=0)
 
             # Predict
             predictions = model.predict(img_array_exp)
@@ -128,18 +141,26 @@ with col1:
             predicted_class = class_names[pred_index]
             confidence = predictions[0][pred_index] * 100
 
-            # Use tf-keras-vis Grad-CAM
+            # Grad-CAM
             try:
+                if last_conv_layer_name is None:
+                    raise ValueError("No suitable convolutional layer found")
+
                 gradcam = Gradcam(model)
-                score = CategoricalScore([pred_index])  # target the predicted class
-                cam = gradcam(score, img_array_exp, penultimate_layer=-1, seek_penultimate_conv_layer=True)
-                heatmap = cam[0]  # shape: (H, W)
+                score = CategoricalScore([pred_index])
 
-                # Prepare OpenCV image
-                img_cv = np.array(img_resized)
-                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+                cam = gradcam(
+                    score,
+                    img_array_exp,
+                    penultimate_layer=last_conv_layer_name,
+                    seek_penultimate_conv_layer=False
+                )
+                heatmap = cam[0]  # (H, W)
 
-                # Localize → get box and cropped region
+                # Convert to OpenCV format
+                img_cv = cv2.cvtColor(np.array(img_resized), cv2.COLOR_RGB2BGR)
+
+                # Get bounding box and cropped region
                 cropped, boxed_img = localize_pest(
                     img_cv, 
                     heatmap, 
@@ -147,7 +168,7 @@ with col1:
                     min_area_ratio=min_area_ratio
                 )
 
-                # Show image with bounding box
+                # Display image with bounding box
                 boxed_rgb = cv2.cvtColor(boxed_img, cv2.COLOR_BGR2RGB)
                 st.image(boxed_rgb, caption=f"Detected: {predicted_class}", use_column_width=True)
 
@@ -156,7 +177,9 @@ with col1:
                     st.image(cropped_rgb, caption=f"Localized {predicted_class} (cropped)", width=300)
 
             except Exception as e:
-                st.warning(f"Grad-CAM failed: {e}\nFalling back to prediction only.")
+                st.warning(f"Grad-CAM failed: {str(e)[:150]}... Showing prediction only.")
+                # Fallback: show original image
+                st.image(image, caption=f"Prediction: {predicted_class} (no localization)", use_column_width=True)
 
 with col2:
     if uploaded_file is not None:
@@ -169,10 +192,9 @@ with col2:
                 for i, prob in enumerate(predictions[0]):
                     st.write(f"{class_names[i]}: {prob*100:.2f}%")
 
-        # Download option
         if st.button("Download Result Summary"):
             summary = f"Pest: {predicted_class}\nConfidence: {confidence:.2f}%"
             st.download_button("Download", summary, file_name="pest_result.txt")
 
 st.markdown("---")
-st.caption("Powered by your custom model + tf-keras-vis Grad-CAM for explainability")
+st.caption("Powered by custom model • Localization via Grad-CAM (tf-keras-vis)")
