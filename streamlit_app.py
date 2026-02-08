@@ -266,12 +266,12 @@ def main():
         img_file = st.camera_input("Take a clear picture of the pest to get detail informations")
         if img_file:
             processed_image = Image.open(img_file).convert("RGB")
-           
+          
     elif input_mode == "📂 Upload Image":
         img_file = st.file_uploader("Upload Image", type=['jpg', 'png', 'jpeg'])
         if img_file:
             processed_image = Image.open(img_file).convert("RGB")
-        # New feature: Fetch random 7 test images from GitHub
+        # New feature: Fetch random 10 test images from GitHub
         if not processed_image:
             st.subheader("Or choose a test pest for testing")
             if 'random_pests' not in st.session_state:
@@ -279,7 +279,7 @@ def main():
             if 'test_images' not in st.session_state:
                 st.session_state.test_images = {}
                 for pest in st.session_state.random_pests:
-                    class_url = f"https://api.github.com/repos/blurerjr/Explainable-Pest-Detection/contents/test/?ref=8eabae8d2e82acbc7507a2a41e2bec28ac1ab097"
+                    class_url = f"https://api.github.com/repos/blurerjr/Explainable-Pest-Detection/contents/test/{pest}/?ref=main"
                     resp = requests.get(class_url)
                     if resp.status_code == 200:
                         files = resp.json()
@@ -295,11 +295,10 @@ def main():
                 with cols[i]:
                     img_name = st.session_state.test_images.get(pest)
                     if img_name:
-                        raw_url = f"https://raw.githubusercontent.com/blurerjr/Explainable-Pest-Detection/8eabae8d2e82acbc7507a2a41e2bec28ac1ab097/test/{img_name}"
+                        raw_url = f"https://raw.githubusercontent.com/blurerjr/Explainable-Pest-Detection/main/test/{pest}/{img_name}"
                         st.image(raw_url, use_column_width=True)
                         if st.button("Select", key=f"select_{pest}_{i}"):
-                            st.session_state.selected_test_url = raw_url
-           
+                            st.session_state.selected_test_url = raw_url           
     elif input_mode == "🎥 Upload Video":
         video_file = st.file_uploader("Upload Video", type=['mp4', 'mov'])
         if video_file:
