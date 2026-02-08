@@ -1,305 +1,389 @@
 import streamlit as st
-import tensorflow as tf
+import tensorflow as keras
+from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import img_to_array
-import numpy as np
 from PIL import Image, ImageOps
-import requests
-from io import BytesIO
+import numpy as np
 import pandas as pd
+import altair as alt
+import requests
+import os
+import cv2
+import tempfile
+import time
+from datetime import datetime
 
-# -------------------------------
-# 1. Page Configuration & Styling
-# -------------------------------
+# -----------------------------------------------------------------------------
+# 1. CONFIGURATION & STYLING
+# -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="AgriGuard | Smart Pest Detection",
+    page_title="AgriGuard Pro | AI Pest Diagnostics",
     page_icon="🌿",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better aesthetics
+# Custom CSS
 st.markdown("""
-    <style>
-    .main {
-        background-color: #f5f7f5;
+<style>
+    /* Global Styles */
+    .stApp {
+        background-color: #f4f7f6;
     }
-    .stButton>button {
-        width: 100%;
-        background-color: #2e7d32;
-        color: white;
-    }
-    .stMetric {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-    }
+    
+    /* Typography */
     h1, h2, h3 {
-        color: #1b5e20;
+        color: #1b4332;
+        font-family: 'Helvetica Neue', sans-serif;
     }
-    </style>
-    """, unsafe_allow_html=True)
+    
+    /* Custom Cards */
+    .card {
+        background-color: white;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        margin-bottom: 20px;
+    }
+    
+    /* Success/Warning/Error Badges */
+    .badge-success {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 5px 10px;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    .badge-warning {
+        background-color: #fff3cd;
+        color: #856404;
+        padding: 5px 10px;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    
+    /* Prediction Score */
+    .big-score {
+        font-size: 48px;
+        font-weight: 800;
+        color: #2d6a4f;
+    }
+    
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e0e0e0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# -------------------------------
-# 2. Model Loading
-# -------------------------------
-@st.cache_resource
-def load_pest_model():
-    # URL provided in original prompt
-    url = "https://github.com/blurerjr/Explainable-Pest-Detection/releases/download/model/best_pest_model.keras"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        model_bytes = BytesIO(response.content)
-        # Load model with compile=False to avoid issues with custom optimizers/losses during inference
-        model = tf.keras.models.load_model(model_bytes, compile=False)
-        return model
-    except Exception as e:
-        st.error(f"⚠️ Critical Error: Could not load model. Details: {e}")
-        st.stop()
+# -----------------------------------------------------------------------------
+# 2. CONSTANTS & DATA
+# -----------------------------------------------------------------------------
+MODEL_URL = "https://github.com/blurerjr/Explainable-Pest-Detection/releases/download/model/best_pest_model.keras"
+MODEL_PATH = "best_pest_model.keras"
+CLASS_NAMES = ['aphids', 'armyworm', 'beetle', 'bollworm', 'catterpillar', 
+               'earthworms', 'grasshopper', 'mites', 'moth', 'sawfly', 
+               'stem_borer', 'wasp', 'weevil']
 
-model = load_pest_model()
-
-# -------------------------------
-# 3. Data & Classes
-# -------------------------------
-CLASSES = [
-    'aphids', 'armyworm', 'beetle', 'bollworm', 'caterpillar', 'earthworms',
-    'grasshopper', 'mites', 'moth', 'sawfly', 'stem_borer', 'wasp', 'weevil'
-]
-
-PEST_DATA = {
-    "aphids": {
-        "name": "Aphids",
-        "description": "Small, soft-bodied insects that suck sap from leaves and stems, causing distortion.",
-        "cause": "Warm, humid weather; excess nitrogen fertilizer.",
-        "control": ["Spray strong jet of water.", "Neem oil application.", "Introduce ladybugs."],
-        "severity": "Moderate"
+PEST_INFO = {
+    'aphids': {
+        'name': 'Aphids (Plant Lice)',
+        'details': 'Small sap-sucking insects that cluster on new growth.',
+        'cause': 'High nitrogen levels; lack of natural predators.',
+        'control': 'Neem oil, insecticidal soaps, ladybugs.',
+        'risk_level': 'Moderate'
     },
-    "armyworm": {
-        "name": "Armyworm",
-        "description": "Caterpillars that move in large groups, consuming grasses and cereals.",
-        "cause": "Night-time migrations, warm/moist springs.",
-        "control": ["Bacillus thuringiensis (Bt) spray.", "Field sanitation.", "Nocturnal hand-picking."],
-        "severity": "High"
+    'armyworm': {
+        'name': 'Armyworm',
+        'details': 'Caterpillars that move in groups stripping leaves.',
+        'cause': 'Grassy weeds; cool wet springs.',
+        'control': 'Bacillus thuringiensis (Bt), trichogramma wasps.',
+        'risk_level': 'High'
     },
-    "beetle": {
-        "name": "Leaf Beetle",
-        "description": "Hard-shelled insects that skeletonize leaves.",
-        "cause": "High moisture, weeds, overwintering adults.",
-        "control": ["Crop rotation.", "Pyrethroid sprays.", "Encourage spiders."],
-        "severity": "Moderate"
+    'beetle': {
+        'name': 'Beetle',
+        'details': 'Hard-shelled insects causing leaf skeletonization.',
+        'cause': 'Overwintering in soil/debris.',
+        'control': 'Hand-picking, floating row covers, nematodes.',
+        'risk_level': 'Moderate'
     },
-    "bollworm": {
-        "name": "Bollworm",
-        "description": "Larvae that bore into flower buds and fruits (also known as Corn Earworm).",
-        "cause": "Warm temps, nearby corn/soybean hosts.",
-        "control": ["Pheromone traps.", "Spinosad spray.", "Bt resistant varieties."],
-        "severity": "High"
+    'bollworm': {
+        'name': 'Bollworm',
+        'details': 'Larvae that bore into fruit and pods.',
+        'cause': 'Moth migration; monocultures.',
+        'control': 'Pheromone traps, resistant crop varieties.',
+        'risk_level': 'High'
     },
-    "caterpillar": {
-        "name": "Caterpillar (General)",
-        "description": "Larvae of moths/butterflies with chewing mouthparts.",
-        "cause": "Butterfly/moth egg laying.",
-        "control": ["Hand-picking.", "Bt spray.", "Row covers."],
-        "severity": "Variable"
+    'catterpillar': {
+        'name': 'Caterpillar',
+        'details': 'Leaf chewers causing irregular holes.',
+        'cause': 'Butterflies/moths laying eggs.',
+        'control': 'Bt spray, hand-picking, bird encouragement.',
+        'risk_level': 'Moderate'
     },
-    "earthworms": {
-        "name": "Earthworms",
-        "description": "Beneficial soil organisms. Not usually a pest.",
-        "cause": "Healthy, organic-rich soil.",
-        "control": ["No action needed (Beneficial).", "Reduce irrigation if excessive."],
-        "severity": "None"
+    'earthworms': {
+        'name': 'Earthworm',
+        'details': 'Beneficial soil aerators.',
+        'cause': 'Healthy soil ecosystem.',
+        'control': 'None required. They are friends!',
+        'risk_level': 'None'
     },
-    "grasshopper": {
-        "name": "Grasshopper",
-        "description": "Chewing insects that can strip whole plants.",
-        "cause": "Dry, hot conditions; unkept field borders.",
-        "control": ["Nosema locustae bait.", "Trim field borders.", "Early season spray."],
-        "severity": "High"
+    'grasshopper': {
+        'name': 'Grasshopper',
+        'details': 'Jumping insects that consume foliage.',
+        'cause': 'Dry weather; nearby uncultivated land.',
+        'control': 'Nolo Bait, tilling in fall.',
+        'risk_level': 'High'
     },
-    "mites": {
-        "name": "Spider Mites",
-        "description": "Tiny arachnids causing yellow stippling and webbing.",
-        "cause": "Hot, dry, dusty conditions.",
-        "control": ["Increase humidity/misting.", "Horticultural oil.", "Predatory mites."],
-        "severity": "Moderate"
+    'mites': {
+        'name': 'Spider Mites',
+        'details': 'Tiny arachnids causing yellow stippling.',
+        'cause': 'Hot, dusty, dry conditions.',
+        'control': 'Misting, predatory mites, horticultural oil.',
+        'risk_level': 'Moderate'
     },
-    "moth": {
-        "name": "Moth (Adult/Larvae)",
-        "description": "Flying adults lay eggs; larvae cause the damage.",
-        "cause": "Attraction to lights, migration.",
-        "control": ["Light traps.", "Mating disruption.", "Neem oil."],
-        "severity": "Variable"
+    'moth': {
+        'name': 'Moth',
+        'details': 'Adult stage of larvae pests.',
+        'cause': 'Attracted to light; open access.',
+        'control': 'Light traps, netting.',
+        'risk_level': 'Low (Directly)'
     },
-    "sawfly": {
-        "name": "Sawfly Larvae",
-        "description": "Wasp-like larvae that skeletonize leaves.",
-        "cause": "Warm, humid periods.",
-        "control": ["Spinosad.", "Hand-picking.", "Pruning infested parts."],
-        "severity": "Low to Moderate"
+    'sawfly': {
+        'name': 'Sawfly Larvae',
+        'details': 'Wasp-like larvae that skeletonize leaves.',
+        'cause': 'Spring emergence from soil.',
+        'control': 'Insecticidal soap (NOT Bt).',
+        'risk_level': 'Moderate'
     },
-    "stem_borer": {
-        "name": "Stem Borer",
-        "description": "Larvae tunnel inside stems causing 'dead heart'.",
-        "cause": "Old crop residues, cracks in plant stems.",
-        "control": ["Systemic insecticides.", "Pheromone traps.", "Destroy residues."],
-        "severity": "Critical"
+    'stem_borer': {
+        'name': 'Stem Borer',
+        'details': 'Larvae boring internally into stems.',
+        'cause': 'Poor field sanitation.',
+        'control': 'Destroy infected stems, crop rotation.',
+        'risk_level': 'Severe'
     },
-    "wasp": {
-        "name": "Fruit Wasp",
-        "description": "Sting fruit causing premature drop.",
-        "cause": "Ripe/rotting fruit, sugary baits.",
-        "control": ["Fruit bagging.", "Sugar/Vinegar traps.", "Sanitation."],
-        "severity": "Moderate"
+    'wasp': {
+        'name': 'Wasp',
+        'details': 'Flying stinging insects. Often predatory.',
+        'cause': 'Nesting sites nearby.',
+        'control': 'Traps only if safety hazard.',
+        'risk_level': 'Low (to crops)'
     },
-    "weevil": {
-        "name": "Weevil",
-        "description": "Snout beetles; larvae feed on roots, adults on leaves.",
-        "cause": "Crop debris, warm/moist soil.",
-        "control": ["Remove residues.", "Nematode application.", "Pyrethroids."],
-        "severity": "Moderate"
-    },
+    'weevil': {
+        'name': 'Weevil',
+        'details': 'Snouted beetles damaging grains/roots.',
+        'cause': 'Infested stored seeds.',
+        'control': 'Sanitation, diatomaceous earth.',
+        'risk_level': 'High'
+    }
 }
 
-# -------------------------------
-# 4. Helper Functions
-# -------------------------------
-def preprocess_image(image):
-    """Resize, normalize, and handle alpha channels."""
-    # Convert to RGB to handle PNG transparency or grayscale
-    if image.mode != "RGB":
-        image = image.convert("RGB")
+# -----------------------------------------------------------------------------
+# 3. HELPER FUNCTIONS
+# -----------------------------------------------------------------------------
+
+@st.cache_resource
+def get_model():
+    if not os.path.exists(MODEL_PATH):
+        with st.spinner("Downloading AI Model (This happens only once)..."):
+            try:
+                response = requests.get(MODEL_URL, stream=True)
+                response.raise_for_status()
+                with open(MODEL_PATH, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            except Exception as e:
+                st.error(f"Failed to download model: {e}")
+                return None
+    try:
+        return load_model(MODEL_PATH)
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
+        return None
+
+def preprocess_image(image_data):
+    image = ImageOps.fit(image_data, (224, 224), Image.Resampling.LANCZOS)
+    image_array = img_to_array(image) / 255.0
+    image_array = np.expand_dims(image_array, axis=0)
+    return image, image_array
+
+def create_download_report(pest_name, score, details, advice):
+    report_text = f"""
+    AGRIGUARD DIAGNOSTIC REPORT
+    ---------------------------
+    Date: {datetime.now().strftime("%Y-%m-%d %H:%M")}
     
-    img_resized = image.resize((224, 224))
-    img_array = img_to_array(img_resized)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array /= 255.0  # Normalize
-    return img_array
-
-# -------------------------------
-# 5. Sidebar Layout
-# -------------------------------
-with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/188/188333.png", width=100)
-    st.title("AgriGuard 🌿")
-    st.markdown("---")
+    DETECTED PEST: {pest_name}
+    CONFIDENCE: {score:.1%}
     
-    st.subheader("⚙️ Settings")
-    confidence_threshold = st.slider(
-        "Confidence Threshold (%)", 
-        min_value=0, max_value=100, value=40, step=5,
-        help="Only show results if the model is this confident."
-    )
+    DETAILS:
+    {details}
     
-    st.markdown("---")
-    st.info(
-        """
-        **How to use:**
-        1. Upload a photo or use your camera.
-        2. Wait for the analysis.
-        3. Read the control recommendations.
-        """
-    )
-    st.caption(f"Model v1.0 | {len(CLASSES)} Classes")
-
-# -------------------------------
-# 6. Main Application Logic
-# -------------------------------
-st.title("🐛 Intelligent Pest Advisor")
-st.markdown("### Identify agricultural pests and get immediate control solutions.")
-
-# Tabs for input method
-tab1, tab2 = st.tabs(["📤 Upload Image", "📸 Camera Capture"])
-
-image_input = None
-
-with tab1:
-    uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
-    if uploaded_file:
-        image_input = Image.open(uploaded_file)
-
-with tab2:
-    camera_file = st.camera_input("Take a picture")
-    if camera_file:
-        image_input = Image.open(camera_file)
-
-# Processing Block
-if image_input is not None:
-    # Layout: Image on left, Results on right
-    col1, col2 = st.columns([1, 1.5])
+    RECOMMENDED ACTION:
+    {advice}
     
-    with col1:
-        st.image(image_input, caption="Analyzed Image", use_column_width=True, output_format="JPEG")
+    ---------------------------
+    Generated by AgriGuard AI
+    """
+    return report_text
+
+# -----------------------------------------------------------------------------
+# 4. APP LAYOUT
+# -----------------------------------------------------------------------------
+
+def main():
+    # Session State for History
+    if 'history' not in st.session_state:
+        st.session_state.history = []
+
+    # -- Sidebar --
+    with st.sidebar:
+        st.image("https://cdn-icons-png.flaticon.com/512/628/628283.png", width=80)
+        st.title("AgriGuard Pro")
+        st.caption("v2.0.1 | AI-Powered AgTech")
+        
+        st.markdown("---")
+        
+        input_mode = st.radio("Input Source", ["📸 Camera", "📂 Upload Image", "🎥 Upload Video"])
+        
+        st.markdown("---")
+        st.subheader("Settings")
+        confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.4, 0.05, help="Minimum score to consider a detection valid.")
+        
+        st.markdown("---")
+        if st.session_state.history:
+            st.subheader("Recent Detections")
+            for item in st.session_state.history[-5:]:
+                st.text(f"• {item}")
+
+    # -- Main Content --
+    col_hero1, col_hero2 = st.columns([3, 1])
+    with col_hero1:
+        st.title("Plant Health Diagnostics")
+        st.markdown("Upload an image or use your camera to detect pests and get immediate control recommendations.")
+    with col_hero2:
+        # Simulated weather widget
+        st.info(f"📍 Local Conditions: 28°C, Humidity 65%")
+
+    model = get_model()
+    if not model:
+        st.stop()
+
+    # Input Logic
+    processed_image = None
     
-    with col2:
-        try:
-            with st.spinner("🔍 Analyzing leaf patterns..."):
-                # Preprocess
-                processed_img = preprocess_image(image_input)
-                
-                # Predict
-                prediction = model.predict(processed_img)
-                predicted_class_idx = np.argmax(prediction)
-                confidence = float(np.max(prediction)) * 100
-                predicted_pest_key = CLASSES[predicted_class_idx]
-                
-                # Get Top 3 Predictions for Chart
-                top_3_indices = np.argsort(prediction[0])[-3:][::-1]
-                top_3_probs = prediction[0][top_3_indices] * 100
-                top_3_names = [CLASSES[i] for i in top_3_indices]
-                
-                chart_data = pd.DataFrame({
-                    "Pest": top_3_names,
-                    "Confidence": top_3_probs
-                })
+    if input_mode == "📸 Camera":
+        img_file = st.camera_input("Take a clear picture of the pest")
+        if img_file:
+            processed_image = Image.open(img_file).convert("RGB")
+            
+    elif input_mode == "📂 Upload Image":
+        img_file = st.file_uploader("Upload Image", type=['jpg', 'png', 'jpeg'])
+        if img_file:
+            processed_image = Image.open(img_file).convert("RGB")
+            
+    elif input_mode == "🎥 Upload Video":
+        video_file = st.file_uploader("Upload Video", type=['mp4', 'mov'])
+        if video_file:
+            tfile = tempfile.NamedTemporaryFile(delete=False)
+            tfile.write(video_file.read())
+            cap = cv2.VideoCapture(tfile.name)
+            ret, frame = cap.read() # Take first frame for simplicity/speed in demo
+            if ret:
+                processed_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            cap.release()
+            os.remove(tfile.name)
 
-            # Logic based on Threshold
-            if confidence >= confidence_threshold:
-                pest_info = PEST_DATA.get(predicted_pest_key, {})
-                display_name = pest_info.get('name', predicted_pest_key.capitalize())
-                
-                # Trigger image tag for clarity
-                st.markdown(f"## Detected: **{display_name}**")
-                
-                # Confidence Meter
-                if confidence > 85:
-                    st.success(f"Confidence: {confidence:.2f}% (High)")
-                elif confidence > 60:
-                    st.warning(f"Confidence: {confidence:.2f}% (Moderate)")
-                else:
-                    st.error(f"Confidence: {confidence:.2f}% (Low)")
-                
-                # Diagram trigger for visual verification
-                st.write(f"")
+    # -- Analysis Section --
+    if processed_image:
+        st.markdown("---")
+        
+        # Two-column layout for results
+        col_img, col_data = st.columns([1, 1.5], gap="large")
+        
+        display_img, input_arr = preprocess_image(processed_image)
+        
+        with st.spinner("Analyzing biological signatures..."):
+            predictions = model.predict(input_arr)
+            time.sleep(0.5) # UX smoother
+        
+        # Process Results
+        top_indices = np.argsort(predictions[0])[::-1][:3]
+        top_scores = predictions[0][top_indices]
+        top_classes = [CLASS_NAMES[i] for i in top_indices]
+        
+        main_score = top_scores[0]
+        main_class = top_classes[0]
+        pest_data = PEST_INFO.get(main_class, {})
 
-                # Probability Chart
-                with st.expander("📊 View Probability Breakdown"):
-                    st.bar_chart(chart_data.set_index("Pest"))
+        # -- Left Column (Image) --
+        with col_img:
+            st.image(processed_image, caption="Analyzed Specimen", use_container_width=True)
+            
+            # Risk Level Badge
+            risk = pest_data.get('risk_level', 'Unknown')
+            risk_color = "red" if risk in ['High', 'Severe'] else "orange" if risk == 'Moderate' else "green"
+            st.markdown(f"**Risk Level:** :{risk_color}[{risk}]")
 
-                # Pest Details
-                st.markdown("---")
-                st.subheader("📝 Diagnosis Report")
-                
-                st.markdown(f"**Severity:** {pest_info.get('severity', 'Unknown')}")
-                st.markdown(f"**Symptoms:** {pest_info.get('description', 'No description available.')}")
-                
-                st.markdown("### 🛡️ Recommended Actions")
-                if 'control' in pest_info:
-                    for step in pest_info['control']:
-                        st.markdown(f"✅ {step}")
-                else:
-                    st.write("Consult a local agronomist.")
-
+        # -- Right Column (Data & Insights) --
+        with col_data:
+            if main_score < confidence_threshold:
+                st.warning(f"⚠️ Low Confidence Detection ({main_score:.1%}). The model is unsure. Please try a clearer image.")
             else:
-                st.warning(f"⚠️ Pest detected as **{predicted_pest_key}**, but confidence ({confidence:.2f}%) is below your threshold of {confidence_threshold}%.")
-                st.markdown("Please try uploading a clearer image or zooming in on the pest.")
-                with st.expander("See what the model thought"):
-                     st.bar_chart(chart_data.set_index("Pest"))
+                # Add to history
+                if main_class not in st.session_state.history:
+                    st.session_state.history.append(main_class)
+                
+                # Header
+                st.markdown(f"### Detected: **{pest_data.get('name', main_class).upper()}**")
+                
+                # Probability Chart (Altair)
+                df_probs = pd.DataFrame({
+                    'Pest': top_classes,
+                    'Probability': top_scores
+                })
+                
+                chart = alt.Chart(df_probs).mark_bar().encode(
+                    x=alt.X('Probability', axis=alt.Axis(format='%')),
+                    y=alt.Y('Pest', sort='-x'),
+                    color=alt.condition(
+                        alt.datum.Pest == main_class,
+                        alt.value('#2e7d32'),  # Highlight winner
+                        alt.value('#a5d6a7')   # Others
+                    ),
+                    tooltip=['Pest', alt.Tooltip('Probability', format='.1%')]
+                ).properties(height=150)
+                
+                st.altair_chart(chart, use_container_width=True)
 
-        except Exception as e:
-            st.error(f"An error occurred during analysis: {e}")
+                # Tabs for Details
+                tab1, tab2, tab3 = st.tabs(["📋 Description", "🛡️ Treatment", "🩺 Causes"])
+                
+                with tab1:
+                    st.write(pest_data.get('details'))
+                
+                with tab2:
+                    st.success(f"**Action Plan:** {pest_data.get('control')}")
+                
+                with tab3:
+                    st.info(f"**Root Cause:** {pest_data.get('cause')}")
 
-else:
-    # Empty state placeholder
-    st.info("👆 Please upload an image or take a photo to start the diagnosis.")
+                # Download Report Button
+                report = create_download_report(
+                    pest_data.get('name', main_class), 
+                    main_score, 
+                    pest_data.get('details'), 
+                    pest_data.get('control')
+                )
+                
+                st.download_button(
+                    label="📄 Download Diagnostic Report",
+                    data=report,
+                    file_name=f"AgriGuard_Report_{main_class}.txt",
+                    mime="text/plain"
+                )
+
+if __name__ == "__main__":
+    main()
