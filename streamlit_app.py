@@ -286,7 +286,7 @@ def main():
             if 'test_images' not in st.session_state:
                 st.session_state.test_images = {}
                 for pest in st.session_state.random_pests:
-                    class_url = f"https://api.github.com/repos/blurerjr/Explainable-Pest-Detection/contents/test/{pest}/?ref=main"
+                    class_url = f"https://api.github.com/repos/blurerjr/Explainable-Pest-Detection/contents/test/?ref=main"
                     resp = requests.get(class_url)
                     if resp.status_code == 200:
                         files = resp.json()
@@ -302,7 +302,7 @@ def main():
                 with cols[i]:
                     img_name = st.session_state.test_images.get(pest)
                     if img_name:
-                        raw_url = f"https://raw.githubusercontent.com/blurerjr/Explainable-Pest-Detection/main/test/{pest}/{img_name}"
+                        raw_url = f"https://raw.githubusercontent.com/blurerjr/Explainable-Pest-Detection/main/test/{img_name}"
                         st.image(raw_url, use_column_width=True)
                         if st.button("Select", key=f"select_{pest}_{i}"):
                             st.session_state.selected_test_url = raw_url
