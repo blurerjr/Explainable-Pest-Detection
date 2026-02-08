@@ -14,7 +14,6 @@ import time
 from datetime import datetime
 import random
 from io import BytesIO
-
 # -----------------------------------------------------------------------------
 # 1. CONFIGURATION & STYLING
 # -----------------------------------------------------------------------------
@@ -24,7 +23,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 # Custom CSS
 st.markdown("""
 <style>
@@ -32,13 +30,13 @@ st.markdown("""
     .stApp {
         background-color: #f4f7f6;
     }
-  
+   
     /* Typography */
     h1, h2, h3 {
         color: #1b4332;
         font-family: 'Helvetica Neue', sans-serif;
     }
-  
+   
     /* Custom Cards */
     .card {
         background-color: white;
@@ -47,7 +45,7 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         margin-bottom: 20px;
     }
-  
+   
     /* Success/Warning/Error Badges */
     .badge-success {
         background-color: #d4edda;
@@ -63,14 +61,14 @@ st.markdown("""
         border-radius: 4px;
         font-weight: bold;
     }
-  
+   
     /* Prediction Score */
     .big-score {
         font-size: 48px;
         font-weight: 800;
         color: #2d6a4f;
     }
-  
+   
     /* Sidebar */
     section[data-testid="stSidebar"] {
         background-color: #ffffff;
@@ -78,7 +76,6 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
 # -----------------------------------------------------------------------------
 # 2. CONSTANTS & DATA
 # -----------------------------------------------------------------------------
@@ -180,7 +177,6 @@ PEST_INFO = {
         'risk_level': 'High'
     }
 }
-
 # -----------------------------------------------------------------------------
 # 3. HELPER FUNCTIONS
 # -----------------------------------------------------------------------------
@@ -202,33 +198,30 @@ def get_model():
     except Exception as e:
         st.error(f"Error loading model: {e}")
         return None
-
 def preprocess_image(image_data):
     image = ImageOps.fit(image_data, (224, 224), Image.Resampling.LANCZOS)
     image_array = img_to_array(image) / 255.0
     image_array = np.expand_dims(image_array, axis=0)
     return image, image_array
-
 def create_download_report(pest_name, score, details, advice):
     report_text = f"""
     AGRIGUARD DIAGNOSTIC REPORT
     ---------------------------
     Date: {datetime.now().strftime("%Y-%m-%d %H:%M")}
-  
+   
     DETECTED PEST: {pest_name}
     CONFIDENCE: {score:.1%}
-  
+   
     DETAILS:
     {details}
-  
+   
     RECOMMENDED ACTION:
     {advice}
-  
+   
     ---------------------------
-    Developed by Kwasu Student
+    Developed by Kwasu  Student
     """
     return report_text
-
 # -----------------------------------------------------------------------------
 # 4. APP LAYOUT
 # -----------------------------------------------------------------------------
@@ -241,15 +234,15 @@ def main():
         st.image("https://cdn-icons-png.flaticon.com/512/628/628283.png", width=80)
         st.title("Explainable Pest Detection")
         st.caption("v2.0 | AI-Powered Pest Detection")
-      
+       
         st.markdown("---")
-      
+       
         input_mode = st.radio("Input Source", ["📸 Camera", "📂 Upload Image", "🎥 Upload Video"])
-      
+       
         st.markdown("---")
         st.subheader("Settings")
         confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.4, 0.05, help="Minimum score to consider a detection valid.")
-      
+       
         st.markdown("---")
         if st.session_state.history:
             st.subheader("Recent Detections")
@@ -268,17 +261,17 @@ def main():
         st.stop()
     # Input Logic
     processed_image = None
-  
+   
     if input_mode == "📸 Camera":
         img_file = st.camera_input("Take a clear picture of the pest to get detail informations")
         if img_file:
             processed_image = Image.open(img_file).convert("RGB")
-          
+           
     elif input_mode == "📂 Upload Image":
         img_file = st.file_uploader("Upload Image", type=['jpg', 'png', 'jpeg'])
         if img_file:
             processed_image = Image.open(img_file).convert("RGB")
-        # New feature: Fetch random 10 test images from GitHub
+        # New feature: Fetch random 7 test images from GitHub
         if not processed_image:
             st.subheader("Or choose a test pest for testing")
             if 'random_pests' not in st.session_state:
@@ -286,7 +279,7 @@ def main():
             if 'test_images' not in st.session_state:
                 st.session_state.test_images = {}
                 for pest in st.session_state.random_pests:
-                    class_url = f"https://api.github.com/repos/blurerjr/Explainable-Pest-Detection/contents/test/?ref=main"
+                    class_url = f"https://api.github.com/repos/blurerjr/Explainable-Pest-Detection/contents/test/?ref=f4cca1b404e409c763658409ac2d36250bdcddb2"
                     resp = requests.get(class_url)
                     if resp.status_code == 200:
                         files = resp.json()
@@ -302,11 +295,11 @@ def main():
                 with cols[i]:
                     img_name = st.session_state.test_images.get(pest)
                     if img_name:
-                        raw_url = f"https://raw.githubusercontent.com/blurerjr/Explainable-Pest-Detection/main/test/{img_name}"
+                        raw_url = f"https://raw.githubusercontent.com/blurerjr/Explainable-Pest-Detection/f4cca1b404e409c763658409ac2d36250bdcddb2/test/{img_name}"
                         st.image(raw_url, use_column_width=True)
                         if st.button("Select", key=f"select_{pest}_{i}"):
                             st.session_state.selected_test_url = raw_url
-          
+           
     elif input_mode == "🎥 Upload Video":
         video_file = st.file_uploader("Upload Video", type=['mp4', 'mov'])
         if video_file:
@@ -321,28 +314,28 @@ def main():
     # -- Analysis Section --
     if processed_image:
         st.markdown("---")
-      
+       
         # Two-column layout for results
         col_img, col_data = st.columns([1, 1.5], gap="large")
-      
+       
         display_img, input_arr = preprocess_image(processed_image)
-      
+       
         with st.spinner("Analyzing biological signatures..."):
             predictions = model.predict(input_arr)
             time.sleep(0.5) # UX smoother
-      
+       
         # Process Results
         top_indices = np.argsort(predictions[0])[::-1][:3]
         top_scores = predictions[0][top_indices]
         top_classes = [CLASS_NAMES[i] for i in top_indices]
-      
+       
         main_score = top_scores[0]
         main_class = top_classes[0]
         pest_data = PEST_INFO.get(main_class, {})
         # -- Left Column (Image) --
         with col_img:
             st.image(processed_image, caption="Analyzed Specimen", use_container_width=True)
-          
+           
             # Risk Level Badge
             risk = pest_data.get('risk_level', 'Unknown')
             risk_color = "red" if risk in ['High', 'Severe'] else "orange" if risk == 'Moderate' else "green"
@@ -355,16 +348,16 @@ def main():
                 # Add to history
                 if main_class not in st.session_state.history:
                     st.session_state.history.append(main_class)
-              
+               
                 # Header
                 st.markdown(f"### Detected: **{pest_data.get('name', main_class).upper()}**")
-              
+               
                 # Probability Chart (Altair)
                 df_probs = pd.DataFrame({
                     'Pest': top_classes,
                     'Probability': top_scores
                 })
-              
+               
                 chart = alt.Chart(df_probs).mark_bar().encode(
                     x=alt.X('Probability', axis=alt.Axis(format='%')),
                     y=alt.Y('Pest', sort='-x'),
@@ -375,17 +368,17 @@ def main():
                     ),
                     tooltip=['Pest', alt.Tooltip('Probability', format='.1%')]
                 ).properties(height=150)
-              
+               
                 st.altair_chart(chart, use_container_width=True)
                 # Tabs for Details
                 tab1, tab2, tab3 = st.tabs(["📋 Description", "🛡️ Treatment", "🩺 Causes"])
-              
+               
                 with tab1:
                     st.write(pest_data.get('details'))
-              
+               
                 with tab2:
                     st.success(f"**Action Plan:** {pest_data.get('control')}")
-              
+               
                 with tab3:
                     st.info(f"**Root Cause:** {pest_data.get('cause')}")
                 # Download Report Button
@@ -395,13 +388,12 @@ def main():
                     pest_data.get('details'),
                     pest_data.get('control')
                 )
-              
+               
                 st.download_button(
                     label="📄 Download Diagnostic Report",
                     data=report,
                     file_name=f"AgriGuard_Report_{main_class}.txt",
                     mime="text/plain"
                 )
-
 if __name__ == "__main__":
     main()
