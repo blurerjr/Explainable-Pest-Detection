@@ -255,7 +255,7 @@ def main():
         st.markdown("Upload an image or use your camera to detect pests and get immediate control recommendations.")
     with col_hero2:
         # Simulated weather widget
-        st.info(f"📍 Local Conditions: 28°C, Humidity 65%")
+        st.info(f"📍 Local Conditions: 29°C, Humidity 67%")
     model = get_model()
     if not model:
         st.stop()
@@ -263,7 +263,7 @@ def main():
     processed_image = None
    
     if input_mode == "📸 Camera":
-        img_file = st.camera_input("Take a clear picture of the pest")
+        img_file = st.camera_input("Take a clear picture of the pest to get detail informations")
         if img_file:
             processed_image = Image.open(img_file).convert("RGB")
            
@@ -290,7 +290,7 @@ def main():
                 resp = requests.get(st.session_state.selected_test_url)
                 if resp.status_code == 200:
                     processed_image = Image.open(BytesIO(resp.content)).convert("RGB")
-            cols = st.columns(7)
+            cols = st.columns(10)
             for i, pest in enumerate(st.session_state.random_pests):
                 with cols[i]:
                     img_name = st.session_state.test_images.get(pest)
