@@ -296,7 +296,7 @@ def main():
                     img_name = st.session_state.test_images.get(pest)
                     if img_name:
                         raw_url = f"https://raw.githubusercontent.com/blurerjr/Explainable-Pest-Detection/8eabae8d2e82acbc7507a2a41e2bec28ac1ab097/test/{img_name}"
-                        st.image(raw_url, caption="Test Image", use_column_width=True)
+                        st.image(raw_url, use_column_width=True)
                         if st.button("Select", key=f"select_{pest}_{i}"):
                             st.session_state.selected_test_url = raw_url
            
