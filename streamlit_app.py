@@ -374,13 +374,13 @@ def main():
                 tab1, tab2, tab3 = st.tabs(["📋 Description", "🛡️ Treatment", "🩺 Causes"])
                
                 with tab1:
-                    st.write(pest_data.get('details'))
+                    st.success(pest_data.get('details'))
                
                 with tab2:
-                    st.success(f"**Action Plan:** {pest_data.get('control')}")
+                    st.success(f"{pest_data.get('control')}")
                
                 with tab3:
-                    st.info(f"**Root Cause:** {pest_data.get('cause')}")
+                    st.info(f"{pest_data.get('cause')}")
                 # Download Report Button
                 report = create_download_report(
                     pest_data.get('name', main_class),
