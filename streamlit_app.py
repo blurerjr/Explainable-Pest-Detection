@@ -182,12 +182,7 @@ def manual_testing_mode(app_state):
         "Then click 'Test All' to run inference on all images of that pest."
     )
     
-    # ============= DATASET CONFIG =============
-    with st.sidebar.expandable_collapsed(
-        "Configure Testing Parameters", 
-        expanded=False
-    ):
-        # (Parameter configuration remains)
+
     
     # ============= IMAGE SELECTION =============
     pest_dataset = PestDataset(Config.PEST_DATA_DIR)
