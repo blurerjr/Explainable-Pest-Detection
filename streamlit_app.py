@@ -275,7 +275,7 @@ def main():
         if not processed_image:
             st.subheader("Or choose a test pest for testing")
             if 'random_pests' not in st.session_state:
-                st.session_state.random_pests = random.sample(CLASS_NAMES, min(10, len(CLASS_NAMES)))
+                st.session_state.random_pests = random.sample(CLASS_NAMES, min(7, len(CLASS_NAMES)))
             if 'test_images' not in st.session_state:
                 st.session_state.test_images = {}
                 for pest in st.session_state.random_pests:
@@ -290,7 +290,7 @@ def main():
                 resp = requests.get(st.session_state.selected_test_url)
                 if resp.status_code == 200:
                     processed_image = Image.open(BytesIO(resp.content)).convert("RGB")
-            cols = st.columns(10)
+            cols = st.columns(7)
             for i, pest in enumerate(st.session_state.random_pests):
                 with cols[i]:
                     img_name = st.session_state.test_images.get(pest)
